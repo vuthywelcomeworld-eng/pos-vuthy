@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block content %}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card blue">
+      <div class="label"><i class="bi bi-cash-coin"></i> ចំណូលថ្ងៃនេះ (Today Revenue)</div>
+      <div class="value" id="stat-revenue">0.00</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card green">
+      <div class="label"><i class="bi bi-receipt"></i> ការបញ្ជាទិញថ្ងៃនេះ (Orders)</div>
+      <div class="value" id="stat-orders">0</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card orange">
+      <div class="label"><i class="bi bi-box-seam"></i> ចំនួនទំនិញ (Items)</div>
+      <div class="value" id="stat-items">0</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card red">
+      <div class="label"><i class="bi bi-truck"></i> កំពុងដឹកជញ្ជូន (Pending Delivery)</div>
+      <div class="value" id="stat-deliveries">0</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-8">
+    <div class="card p-3">
+      <h6>និន្នាការចំណូល 6 ខែចុងក្រោយ (Revenue Trend - Last 6 Months)</h6>
+      <canvas id="trendChart" height="110"></canvas>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h6>ទំនិញលក់ដាច់បំផុត (Top Selling Items)</h6>
+      <canvas id="topItemsChart" height="180"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="card p-3">
+      <h6 class="text-danger"><i class="bi bi-exclamation-triangle"></i> ស្តុកជិតអស់ (Low Stock Alert)</h6>
+      <table class="table table-sm">
+        <thead><tr><th>Item</th><th>SKU</th><th>Stock</th></tr></thead>
+        <tbody id="low-stock-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+async function loadDashboard(){
+  const res = await apiFetch('/api/dashboard/summary');
+  const data = await res.json();
+
+  document.getElementById('stat-revenue').innerText = money(data.today_revenue);
+  document.getElementById('stat-orders').innerText = data.today_orders;
+  document.getElementById('stat-items').innerText = data.total_items;
+  document.getElementById('stat-deliveries').innerText = data.pending_deliveries;
+
+  const lowStockBody = document.getElementById('low-stock-body');
+  lowStockBody.innerHTML = data.low_stock.map(i => `
+    <tr><td>${i.name}</td><td>${i.sku||''}</td><td class="text-danger fw-bold">${i.stock}</td></tr>
+  `).join('') || '<tr><td colspan="3" class="text-muted">No low stock items</td></tr>';
+
+  new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels: data.trend.map(t => t.month),
+      datasets: [{ label: 'Revenue', data: data.trend.map(t => t.revenue),
+        borderColor: '#4f46e5', backgroundColor: 'rgba(79,70,229,0.15)', fill: true, tension: 0.35 }]
+    },
+    options: { plugins: { legend: { display: false } } }
+  });
+
+  new Chart(document.getElementById('topItemsChart'), {
+    type: 'doughnut',
+    data: {
+      labels: data.top_items.map(t => t.name),
+      datasets: [{ data: data.top_items.map(t => t.qty),
+        backgroundColor: ['#4f46e5','#059669','#f59e0b','#ef4444','#3b82f6'] }]
+    }
+  });
+}
+loadDashboard();
+</script>
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block page_title %}របាយការណ៍ (Reports){% endblock %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <div class="d-flex gap-2 flex-wrap align-items-end">
+    <div>
+      <label class="form-label small mb-0">From</label>
+      <input type="date" id="rep-from" class="form-control form-control-sm">
+    </div>
+    <div>
+      <label class="form-label small mb-0">To</label>
+      <input type="date" id="rep-to" class="form-control form-control-sm">
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="loadReport()"><i class="bi bi-search"></i> Filter</button>
+    <a class="btn btn-outline-secondary btn-sm ms-auto" id="export-csv" href="#"><i class="bi bi-filetype-csv"></i> CSV</a>
+    <a class="btn btn-outline-secondary btn-sm" id="export-xlsx" href="#"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="stat-card blue"><div class="label">Total Revenue</div><div class="value" id="rep-revenue">0.00</div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card green"><div class="label">Total Orders</div><div class="value" id="rep-orders">0</div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card orange"><div class="label">Items Sold</div><div class="value" id="rep-items-sold">0</div></div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table table-sm table-hover">
+    <thead><tr><th>Invoice</th><th>Date</th><th>Client</th><th>Subtotal</th><th>Discount</th><th>Tax</th><th>Total</th><th>Payment</th><th>Cashier</th><th></th></tr></thead>
+    <tbody id="report-body"></tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function currentRange(){
+  const from = document.getElementById('rep-from').value;
+  const to = document.getElementById('rep-to').value;
+  let qs = '';
+  if(from) qs += 'from=' + from;
+  if(to) qs += (qs?'&':'') + 'to=' + to;
+  return qs;
+}
+
+async function loadReport(){
+  const qs = currentRange();
+  const res = await apiFetch('/api/reports/sales' + (qs ? '?'+qs : ''));
+  const data = await res.json();
+
+  document.getElementById('rep-revenue').innerText = money(data.summary.total_revenue);
+  document.getElementById('rep-orders').innerText = data.summary.total_orders;
+  document.getElementById('rep-items-sold').innerText = data.summary.total_items_sold;
+
+  document.getElementById('report-body').innerHTML = data.sales.map(s => `
+    <tr>
+      <td>${s.invoice_no}</td><td>${s.created_at}</td><td>${s.client_name}</td>
+      <td>${money(s.subtotal)}</td><td>${money(s.discount)}</td><td>${money(s.tax)}</td>
+      <td class="fw-bold">${money(s.total)}</td><td>${s.payment_method}</td><td>${s.cashier||''}</td>
+      <td><a class="btn btn-sm btn-outline-secondary" href="/receipt/${s.id}" target="_blank"><i class="bi bi-receipt"></i></a></td>
+    </tr>
+  `).join('') || '<tr><td colspan="10" class="text-muted">No sales in this range</td></tr>';
+
+  document.getElementById('export-csv').href = '/api/export/sales?format=csv&' + qs;
+  document.getElementById('export-xlsx').href = '/api/export/sales?format=xlsx&' + qs;
+}
+
+loadReport();
+</script>
+{% endblock %}

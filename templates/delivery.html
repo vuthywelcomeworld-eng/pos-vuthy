@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Delivery{% endblock %}
+{% block page_title %}ការដឹកជញ្ជូន (Delivery Tracking){% endblock %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <div class="d-flex gap-2 flex-wrap">
+    <button class="btn btn-outline-secondary btn-sm" onclick="loadDeliveries('')">All</button>
+    <button class="btn btn-outline-warning btn-sm" onclick="loadDeliveries('pending')">Pending</button>
+    <button class="btn btn-outline-primary btn-sm" onclick="loadDeliveries('shipping')">Shipping</button>
+    <button class="btn btn-outline-success btn-sm" onclick="loadDeliveries('delivered')">Delivered</button>
+    <button class="btn btn-outline-danger btn-sm" onclick="loadDeliveries('cancelled')">Cancelled</button>
+    <a class="btn btn-outline-secondary btn-sm ms-auto" href="/api/export/deliveries?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Export</a>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table table-hover align-middle">
+    <thead><tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Address</th><th>Courier</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <tbody id="deliveries-body"></tbody>
+  </table>
+</div>
+
+<div class="modal fade" id="deliveryModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5>Update Delivery</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="d-id">
+        <div class="mb-2"><label class="form-label">Status</label>
+          <select class="form-select" id="d-status">
+            <option value="pending">Pending</option>
+            <option value="shipping">Shipping</option>
+            <option value="delivered">Delivered</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div class="mb-2"><label class="form-label">Courier</label><input class="form-control" id="d-courier"></div>
+        <div class="mb-2"><label class="form-label">Address</label><input class="form-control" id="d-address"></div>
+        <div class="mb-2"><label class="form-label">Phone</label><input class="form-control" id="d-phone"></div>
+        <div class="mb-2"><label class="form-label">Notes</label><textarea class="form-control" id="d-notes"></textarea></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" onclick="saveDelivery()">Save</button></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let allDeliveries = [];
+async function loadDeliveries(status=''){
+  const res = await apiFetch('/api/deliveries' + (status ? '?status='+status : ''));
+  allDeliveries = await res.json();
+  document.getElementById('deliveries-body').innerHTML = allDeliveries.map(d => `
+    <tr>
+      <td>${d.invoice_no}</td><td>${d.client_name}</td><td>${d.phone||''}</td><td>${d.address||''}</td>
+      <td>${d.courier||''}</td>
+      <td><span class="badge badge-status-${d.status}">${d.status}</span></td>
+      <td class="small text-muted">${d.updated_at}</td>
+      <td><button class="btn btn-sm btn-outline-primary" onclick="editDelivery('${d.id}')"><i class="bi bi-pencil"></i></button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="8" class="text-muted">No deliveries found</td></tr>';
+}
+
+function editDelivery(id){
+  const d = allDeliveries.find(x => x.id === id);
+  document.getElementById('d-id').value = d.id;
+  document.getElementById('d-status').value = d.status;
+  document.getElementById('d-courier').value = d.courier || '';
+  document.getElementById('d-address').value = d.address || '';
+  document.getElementById('d-phone').value = d.phone || '';
+  document.getElementById('d-notes').value = d.notes || '';
+  new bootstrap.Modal(document.getElementById('deliveryModal')).show();
+}
+
+async function saveDelivery(){
+  const id = document.getElementById('d-id').value;
+  const payload = {
+    status: document.getElementById('d-status').value,
+    courier: document.getElementById('d-courier').value,
+    address: document.getElementById('d-address').value,
+    phone: document.getElementById('d-phone').value,
+    notes: document.getElementById('d-notes').value,
+  };
+  await apiFetch('/api/deliveries/' + id, { method:'PUT', body: JSON.stringify(payload) });
+  bootstrap.Modal.getInstance(document.getElementById('deliveryModal')).hide();
+  toast('Delivery updated');
+  loadDeliveries();
+}
+
+loadDeliveries();
+</script>
+{% endblock %}

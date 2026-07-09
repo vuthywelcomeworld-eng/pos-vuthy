@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}Items{% endblock %}
+{% block page_title %}ទំនិញ (Items){% endblock %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <input type="text" id="search-box" class="form-control" style="max-width:300px" placeholder="ស្វែងរក... (search name/sku/barcode)">
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/api/export/items?format=csv"><i class="bi bi-filetype-csv"></i> CSV</a>
+      <a class="btn btn-outline-secondary" href="/api/export/items?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#itemModal" onclick="openNewItem()">
+        <i class="bi bi-plus-circle"></i> បន្ថែមទំនិញ (Add Item)
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table table-hover align-middle">
+    <thead><tr>
+      <th>Name</th><th>SKU</th><th>Barcode</th><th>Category</th><th>Price</th><th>Cost</th><th>Stock</th><th></th>
+    </tr></thead>
+    <tbody id="items-body"></tbody>
+  </table>
+</div>
+
+<!-- Item Modal -->
+<div class="modal fade" id="itemModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="itemModalTitle">Add Item</h5>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="item-id">
+        <div class="mb-2"><label class="form-label">Name*</label><input class="form-control" id="item-name"></div>
+        <div class="row">
+          <div class="col-6 mb-2"><label class="form-label">SKU</label><input class="form-control" id="item-sku"></div>
+          <div class="col-6 mb-2"><label class="form-label">Barcode</label>
+            <div class="input-group">
+              <input class="form-control" id="item-barcode">
+              <button class="btn btn-outline-secondary" type="button" onclick="openScanner('item-barcode')"><i class="bi bi-upc-scan"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-6 mb-2"><label class="form-label">Category</label><input class="form-control" id="item-category"></div>
+          <div class="col-6 mb-2"><label class="form-label">Unit</label><input class="form-control" id="item-unit" value="pcs"></div>
+        </div>
+        <div class="row">
+          <div class="col-4 mb-2"><label class="form-label">Price*</label><input type="number" step="0.01" class="form-control" id="item-price"></div>
+          <div class="col-4 mb-2"><label class="form-label">Cost</label><input type="number" step="0.01" class="form-control" id="item-cost"></div>
+          <div class="col-4 mb-2"><label class="form-label">Initial Stock</label><input type="number" step="0.01" class="form-control" id="item-stock"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-danger me-auto d-none" id="btn-delete-item" onclick="deleteItem()"><i class="bi bi-trash"></i> Delete</button>
+        <button class="btn btn-outline-secondary" onclick="showQr()"><i class="bi bi-qr-code"></i> QR Label</button>
+        <button class="btn btn-primary" onclick="saveItem()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Scanner Modal -->
+<div class="modal fade" id="scannerModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5>Scan Barcode / QR</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><div id="scanner-box"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- QR Modal -->
+<div class="modal fade" id="qrModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content text-center p-3">
+      <img id="qr-img" class="mx-auto" style="width:220px">
+      <div class="mt-2 text-muted small" id="qr-payload"></div>
+      <button class="btn btn-sm btn-outline-primary mt-2" onclick="window.print()">Print</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+let allItems = [];
+let scannerInstance = null;
+let scannerTargetField = null;
+
+async function loadItems(q=''){
+  const res = await apiFetch('/api/items?q=' + encodeURIComponent(q));
+  allItems = await res.json();
+  document.getElementById('items-body').innerHTML = allItems.map(i => `
+    <tr>
+      <td>${i.name}</td><td>${i.sku||''}</td><td>${i.barcode||''}</td><td>${i.category||''}</td>
+      <td>${money(i.price)}</td><td>${money(i.cost)}</td>
+      <td class="${i.stock<=5?'text-danger fw-bold':''}">${i.stock}</td>
+      <td><button class="btn btn-sm btn-outline-primary" onclick="editItem('${i.id}')"><i class="bi bi-pencil"></i></button></td>
+    </tr>
+  `).join('');
+}
+document.getElementById('search-box').addEventListener('input', e => loadItems(e.target.value));
+
+function openNewItem(){
+  document.getElementById('itemModalTitle').innerText = 'Add Item';
+  ['item-id','item-name','item-sku','item-barcode','item-category','item-price','item-cost','item-stock']
+    .forEach(id => document.getElementById(id).value = '');
+  document.getElementById('item-unit').value = 'pcs';
+  document.getElementById('btn-delete-item').classList.add('d-none');
+}
+
+function editItem(id){
+  const item = allItems.find(i => i.id === id);
+  document.getElementById('itemModalTitle').innerText = 'Edit Item';
+  document.getElementById('item-id').value = item.id;
+  document.getElementById('item-name').value = item.name;
+  document.getElementById('item-sku').value = item.sku || '';
+  document.getElementById('item-barcode').value = item.barcode || '';
+  document.getElementById('item-category').value = item.category || '';
+  document.getElementById('item-unit').value = item.unit || 'pcs';
+  document.getElementById('item-price').value = item.price;
+  document.getElementById('item-cost').value = item.cost;
+  document.getElementById('item-stock').value = item.stock;
+  document.getElementById('btn-delete-item').classList.remove('d-none');
+  new bootstrap.Modal(document.getElementById('itemModal')).show();
+}
+
+async function saveItem(){
+  const id = document.getElementById('item-id').value;
+  const payload = {
+    name: document.getElementById('item-name').value,
+    sku: document.getElementById('item-sku').value,
+    barcode: document.getElementById('item-barcode').value,
+    category: document.getElementById('item-category').value,
+    unit: document.getElementById('item-unit').value,
+    price: document.getElementById('item-price').value,
+    cost: document.getElementById('item-cost').value,
+    stock: document.getElementById('item-stock').value,
+  };
+  if(!payload.name || !payload.price){ toast('Name and price are required', 'danger'); return; }
+
+  if(id){
+    await apiFetch('/api/items/' + id, { method:'PUT', body: JSON.stringify(payload) });
+  } else {
+    await apiFetch('/api/items', { method:'POST', body: JSON.stringify(payload) });
+  }
+  bootstrap.Modal.getInstance(document.getElementById('itemModal')).hide();
+  toast('Item saved');
+  loadItems();
+}
+
+async function deleteItem(){
+  const id = document.getElementById('item-id').value;
+  if(!confirm('Delete this item?')) return;
+  await apiFetch('/api/items/' + id, { method:'DELETE' });
+  bootstrap.Modal.getInstance(document.getElementById('itemModal')).hide();
+  toast('Item deleted');
+  loadItems();
+}
+
+async function showQr(){
+  const id = document.getElementById('item-id').value;
+  if(!id){ toast('Save the item first', 'danger'); return; }
+  const res = await apiFetch('/api/items/' + id + '/qrcode');
+  const data = await res.json();
+  document.getElementById('qr-img').src = data.image;
+  document.getElementById('qr-payload').innerText = data.payload;
+  new bootstrap.Modal(document.getElementById('qrModal')).show();
+}
+
+function openScanner(targetFieldId){
+  scannerTargetField = targetFieldId;
+  new bootstrap.Modal(document.getElementById('scannerModal')).show();
+  document.getElementById('scannerModal').addEventListener('shown.bs.modal', startScanner, { once:true });
+  document.getElementById('scannerModal').addEventListener('hidden.bs.modal', stopScanner, { once:true });
+}
+function startScanner(){
+  scannerInstance = new Html5Qrcode("scanner-box");
+  scannerInstance.start({ facingMode:"environment" }, { fps:10, qrbox:220 }, (decodedText) => {
+    document.getElementById(scannerTargetField).value = decodedText;
+    bootstrap.Modal.getInstance(document.getElementById('scannerModal')).hide();
+  }).catch(err => toast('Camera error: ' + err, 'danger'));
+}
+function stopScanner(){
+  if(scannerInstance){ scannerInstance.stop().catch(()=>{}); scannerInstance = null; }
+}
+
+loadItems();
+</script>
+{% endblock %}

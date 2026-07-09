@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% block title %}POS{% endblock %}
+{% block page_title %}ការលក់ (Point of Sale){% endblock %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-md-7">
+    <div class="card p-3 mb-3">
+      <div class="d-flex gap-2">
+        <input type="text" id="pos-search" class="form-control" placeholder="ស្កេន ឬវាយឈ្មោះ/លេខកូដ (scan or type name/barcode)" autofocus>
+        <button class="btn btn-outline-primary" onclick="openScanner()"><i class="bi bi-upc-scan"></i></button>
+      </div>
+    </div>
+    <div class="card p-3">
+      <div class="row g-2" id="pos-items-grid" style="max-height: 60vh; overflow-y:auto;"></div>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card p-3 d-flex flex-column" style="min-height: 80vh;">
+      <h6><i class="bi bi-cart3"></i> កន្ត្រក (Cart)</h6>
+      <div class="mb-2">
+        <select class="form-select form-select-sm" id="pos-client">
+          <option value="">Walk-in Customer</option>
+        </select>
+      </div>
+      <div id="cart-lines" style="flex-grow:1; overflow-y:auto; max-height: 32vh;"></div>
+      <hr>
+      <div class="d-flex justify-content-between"><span>Subtotal</span><span id="cart-subtotal">0.00</span></div>
+      <div class="d-flex justify-content-between align-items-center">
+        <span>Discount</span>
+        <input type="number" class="form-control form-control-sm w-50 text-end" id="cart-discount" value="0" oninput="renderCart()">
+      </div>
+      <div class="d-flex justify-content-between align-items-center">
+        <span>Tax %</span>
+        <input type="number" class="form-control form-control-sm w-50 text-end" id="cart-tax" value="0" oninput="renderCart()">
+      </div>
+      <div class="d-flex justify-content-between fs-5 fw-bold mt-1"><span>Total</span><span id="cart-total">0.00</span></div>
+
+      <div class="mt-2">
+        <label class="form-label small mb-0">Payment method</label>
+        <select class="form-select form-select-sm" id="pos-payment">
+          <option value="cash">Cash</option>
+          <option value="card">Card</option>
+          <option value="qr">QR / Bank Transfer</option>
+        </select>
+      </div>
+      <div class="row mt-2">
+        <div class="col-6">
+          <label class="form-label small mb-0">Paid amount</label>
+          <input type="number" step="0.01" class="form-control form-control-sm" id="pos-paid" oninput="renderCart()">
+        </div>
+        <div class="col-6">
+          <label class="form-label small mb-0">Change</label>
+          <input type="text" class="form-control form-control-sm" id="pos-change" readonly>
+        </div>
+      </div>
+
+      <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" id="need-delivery" onchange="toggleDelivery()">
+        <label class="form-check-label small" for="need-delivery">តម្រូវការដឹកជញ្ជូន (Needs delivery)</label>
+      </div>
+      <div id="delivery-fields" class="d-none mt-1">
+        <input type="text" class="form-control form-control-sm mb-1" id="delivery-phone" placeholder="Phone">
+        <input type="text" class="form-control form-control-sm mb-1" id="delivery-address" placeholder="Address">
+        <input type="text" class="form-control form-control-sm" id="delivery-courier" placeholder="Courier (optional)">
+      </div>
+
+      <button class="btn btn-success w-100 mt-3" onclick="checkout()"><i class="bi bi-check2-circle"></i> បញ្ចប់ការលក់ (Checkout)</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="scannerModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5>Scan Barcode / QR</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><div id="scanner-box"></div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+let cart = [];
+let allItems = [];
+let scannerInstance = null;
+
+async function loadPosItems(q=''){
+  const res = await apiFetch('/api/items?q=' + encodeURIComponent(q));
+  allItems = await res.json();
+  document.getElementById('pos-items-grid').innerHTML = allItems.map(i => `
+    <div class="col-4 col-lg-3">
+      <div class="card pos-item-card border" onclick="addToCart('${i.id}')">
+        <div class="name">${i.name}</div>
+        <div class="price">$${money(i.price)}</div>
+        <div class="small text-muted">stock: ${i.stock}</div>
+      </div>
+    </div>
+  `).join('') || '<p class="text-muted">No items found</p>';
+}
+
+async function loadClients(){
+  const res = await apiFetch('/api/clients');
+  const clients = await res.json();
+  const select = document.getElementById('pos-client');
+  clients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id; opt.dataset.name = c.name;
+    opt.innerText = `${c.name} (${c.phone||''})`;
+    select.appendChild(opt);
+  });
+}
+
+function addToCart(itemId){
+  const item = allItems.find(i => i.id === itemId);
+  if(!item) return;
+  if(item.stock <= 0){ toast('Out of stock', 'danger'); return; }
+  const existing = cart.find(l => l.item_id === itemId);
+  if(existing){ existing.qty += 1; }
+  else { cart.push({ item_id: item.id, name: item.name, price: item.price, qty: 1, max_stock: item.stock }); }
+  renderCart();
+}
+
+function changeQty(itemId, delta){
+  const line = cart.find(l => l.item_id === itemId);
+  if(!line) return;
+  line.qty += delta;
+  if(line.qty <= 0){ cart = cart.filter(l => l.item_id !== itemId); }
+  renderCart();
+}
+
+function removeLine(itemId){
+  cart = cart.filter(l => l.item_id !== itemId);
+  renderCart();
+}
+
+function renderCart(){
+  document.getElementById('cart-lines').innerHTML = cart.map(l => `
+    <div class="cart-line d-flex justify-content-between align-items-center">
+      <div>
+        <div class="small fw-semibold">${l.name}</div>
+        <div class="small text-muted">$${money(l.price)} each</div>
+      </div>
+      <div class="d-flex align-items-center gap-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="changeQty('${l.item_id}',-1)">-</button>
+        <span>${l.qty}</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="changeQty('${l.item_id}',1)">+</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="removeLine('${l.item_id}')"><i class="bi bi-x"></i></button>
+      </div>
+    </div>
+  `).join('') || '<p class="text-muted small">Cart is empty</p>';
+
+  const subtotal = cart.reduce((s,l) => s + l.price*l.qty, 0);
+  const discount = parseFloat(document.getElementById('cart-discount').value || 0);
+  const taxRate = parseFloat(document.getElementById('cart-tax').value || 0);
+  const taxable = Math.max(subtotal - discount, 0);
+  const tax = taxable * taxRate / 100;
+  const total = taxable + tax;
+  const paid = parseFloat(document.getElementById('pos-paid').value || total);
+
+  document.getElementById('cart-subtotal').innerText = money(subtotal);
+  document.getElementById('cart-total').innerText = money(total);
+  document.getElementById('pos-change').value = money(paid - total);
+}
+
+function toggleDelivery(){
+  document.getElementById('delivery-fields').classList.toggle('d-none', !document.getElementById('need-delivery').checked);
+}
+
+async function checkout(){
+  if(cart.length === 0){ toast('Cart is empty', 'danger'); return; }
+  const clientSelect = document.getElementById('pos-client');
+  const payload = {
+    items: cart.map(l => ({ item_id: l.item_id, qty: l.qty, price: l.price })),
+    client_id: clientSelect.value || null,
+    client_name: clientSelect.value ? clientSelect.selectedOptions[0].dataset.name : 'Walk-in Customer',
+    discount: document.getElementById('cart-discount').value,
+    tax_rate: document.getElementById('cart-tax').value,
+    payment_method: document.getElementById('pos-payment').value,
+    paid_amount: document.getElementById('pos-paid').value,
+  };
+  if(document.getElementById('need-delivery').checked){
+    payload.delivery = {
+      phone: document.getElementById('delivery-phone').value,
+      address: document.getElementById('delivery-address').value,
+      courier: document.getElementById('delivery-courier').value,
+    };
+  }
+  const res = await apiFetch('/api/sales', { method:'POST', body: JSON.stringify(payload) });
+  const data = await res.json();
+  if(data.error){ toast(data.error, 'danger'); return; }
+  toast('Sale completed: ' + data.invoice_no);
+  cart = [];
+  document.getElementById('pos-paid').value = '';
+  document.getElementById('cart-discount').value = 0;
+  document.getElementById('cart-tax').value = 0;
+  renderCart();
+  loadPosItems();
+  window.open('/receipt/' + data.id, '_blank');
+}
+
+document.getElementById('pos-search').addEventListener('input', e => loadPosItems(e.target.value));
+document.getElementById('pos-search').addEventListener('keydown', async e => {
+  if(e.key === 'Enter'){
+    const code = e.target.value.trim();
+    const res = await apiFetch('/api/items/lookup/' + encodeURIComponent(code));
+    if(res.status === 200){
+      const item = await res.json();
+      allItems = [item, ...allItems.filter(i=>i.id!==item.id)];
+      addToCart(item.id);
+      e.target.value = '';
+      loadPosItems();
+    }
+  }
+});
+
+function openScanner(){
+  new bootstrap.Modal(document.getElementById('scannerModal')).show();
+  document.getElementById('scannerModal').addEventListener('shown.bs.modal', startScanner, { once:true });
+  document.getElementById('scannerModal').addEventListener('hidden.bs.modal', stopScanner, { once:true });
+}
+function startScanner(){
+  scannerInstance = new Html5Qrcode("scanner-box");
+  scannerInstance.start({ facingMode:"environment" }, { fps:10, qrbox:220 }, async (decodedText) => {
+    const res = await apiFetch('/api/items/lookup/' + encodeURIComponent(decodedText));
+    if(res.status === 200){
+      const item = await res.json();
+      allItems = [item, ...allItems.filter(i=>i.id!==item.id)];
+      addToCart(item.id);
+    } else {
+      toast('Item not found for code: ' + decodedText, 'danger');
+    }
+    bootstrap.Modal.getInstance(document.getElementById('scannerModal')).hide();
+  }).catch(err => toast('Camera error: ' + err, 'danger'));
+}
+function stopScanner(){
+  if(scannerInstance){ scannerInstance.stop().catch(()=>{}); scannerInstance = null; }
+}
+
+loadPosItems();
+loadClients();
+renderCart();
+</script>
+{% endblock %}

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block page_title %}អតិថិជន (Client Registration){% endblock %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <input type="text" id="search-box" class="form-control" style="max-width:300px" placeholder="ស្វែងរក... (search name/phone/code)">
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="/api/export/clients?format=csv"><i class="bi bi-filetype-csv"></i> CSV</a>
+      <a class="btn btn-outline-secondary" href="/api/export/clients?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#clientModal" onclick="openNewClient()">
+        <i class="bi bi-person-plus"></i> ចុះឈ្មោះអតិថិជន (Add Client)
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table table-hover align-middle">
+    <thead><tr><th>Code</th><th>Name</th><th>Phone</th><th>Email</th><th>Address</th><th></th></tr></thead>
+    <tbody id="clients-body"></tbody>
+  </table>
+</div>
+
+<div class="modal fade" id="clientModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="clientModalTitle">Add Client</h5>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="client-id">
+        <div class="mb-2"><label class="form-label">Name*</label><input class="form-control" id="client-name"></div>
+        <div class="mb-2"><label class="form-label">Phone</label><input class="form-control" id="client-phone"></div>
+        <div class="mb-2"><label class="form-label">Email</label><input class="form-control" id="client-email"></div>
+        <div class="mb-2"><label class="form-label">Address</label><textarea class="form-control" id="client-address"></textarea></div>
+        <div class="mb-2"><label class="form-label">Notes</label><textarea class="form-control" id="client-notes"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-danger me-auto d-none" id="btn-delete-client" onclick="deleteClient()"><i class="bi bi-trash"></i> Delete</button>
+        <button class="btn btn-primary" onclick="saveClient()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let allClients = [];
+async function loadClients(q=''){
+  const res = await apiFetch('/api/clients?q=' + encodeURIComponent(q));
+  allClients = await res.json();
+  document.getElementById('clients-body').innerHTML = allClients.map(c => `
+    <tr>
+      <td>${c.code}</td><td>${c.name}</td><td>${c.phone||''}</td><td>${c.email||''}</td><td>${c.address||''}</td>
+      <td><button class="btn btn-sm btn-outline-primary" onclick="editClient('${c.id}')"><i class="bi bi-pencil"></i></button></td>
+    </tr>
+  `).join('');
+}
+document.getElementById('search-box').addEventListener('input', e => loadClients(e.target.value));
+
+function openNewClient(){
+  document.getElementById('clientModalTitle').innerText = 'Add Client';
+  ['client-id','client-name','client-phone','client-email','client-address','client-notes'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('btn-delete-client').classList.add('d-none');
+}
+
+function editClient(id){
+  const c = allClients.find(x => x.id === id);
+  document.getElementById('clientModalTitle').innerText = 'Edit Client';
+  document.getElementById('client-id').value = c.id;
+  document.getElementById('client-name').value = c.name;
+  document.getElementById('client-phone').value = c.phone || '';
+  document.getElementById('client-email').value = c.email || '';
+  document.getElementById('client-address').value = c.address || '';
+  document.getElementById('client-notes').value = c.notes || '';
+  document.getElementById('btn-delete-client').classList.remove('d-none');
+  new bootstrap.Modal(document.getElementById('clientModal')).show();
+}
+
+async function saveClient(){
+  const id = document.getElementById('client-id').value;
+  const payload = {
+    name: document.getElementById('client-name').value,
+    phone: document.getElementById('client-phone').value,
+    email: document.getElementById('client-email').value,
+    address: document.getElementById('client-address').value,
+    notes: document.getElementById('client-notes').value,
+  };
+  if(!payload.name){ toast('Name is required', 'danger'); return; }
+  if(id){ await apiFetch('/api/clients/' + id, { method:'PUT', body: JSON.stringify(payload) }); }
+  else { await apiFetch('/api/clients', { method:'POST', body: JSON.stringify(payload) }); }
+  bootstrap.Modal.getInstance(document.getElementById('clientModal')).hide();
+  toast('Client saved');
+  loadClients();
+}
+
+async function deleteClient(){
+  const id = document.getElementById('client-id').value;
+  if(!confirm('Delete this client?')) return;
+  await apiFetch('/api/clients/' + id, { method:'DELETE' });
+  bootstrap.Modal.getInstance(document.getElementById('clientModal')).hide();
+  toast('Client deleted');
+  loadClients();
+}
+
+loadClients();
+</script>
+{% endblock %}

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+<meta charset="UTF-8">
+<title>Receipt {{ sale.invoice_no }}</title>
+<style>
+  body { font-family: 'Courier New', monospace; width: 300px; margin: 20px auto; font-size: 13px; }
+  h2 { text-align:center; margin-bottom: 4px; }
+  .center { text-align: center; }
+  hr { border: none; border-top: 1px dashed #000; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  td { padding: 2px 0; vertical-align: top; }
+  .right { text-align: right; }
+  .totals td { padding-top: 4px; }
+  .grand { font-weight: bold; font-size: 15px; }
+  .actions { text-align:center; margin-top: 16px; }
+  .actions button, .actions a { margin: 4px; padding: 6px 14px; }
+  @media print { .actions { display:none; } body { margin:0; width:auto; } }
+</style>
+</head>
+<body>
+  <h2>POS VUTHY</h2>
+  <div class="center">RECEIPT / វិក័យប័ត្រ</div>
+  <hr>
+  <div>Invoice: {{ sale.invoice_no }}</div>
+  <div>Date: {{ sale.created_at }}</div>
+  <div>Client: {{ sale.client_name }}</div>
+  <div>Cashier: {{ sale.cashier or '' }}</div>
+  <hr>
+  <table>
+    {% for line in sale.items %}
+    <tr>
+      <td colspan="2">{{ line.name }}</td>
+    </tr>
+    <tr>
+      <td>{{ line.qty }} x {{ "%.2f"|format(line.price) }}</td>
+      <td class="right">{{ "%.2f"|format(line.subtotal) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <hr>
+  <table class="totals">
+    <tr><td>Subtotal</td><td class="right">{{ "%.2f"|format(sale.subtotal) }}</td></tr>
+    <tr><td>Discount</td><td class="right">{{ "%.2f"|format(sale.discount) }}</td></tr>
+    <tr><td>Tax</td><td class="right">{{ "%.2f"|format(sale.tax) }}</td></tr>
+    <tr class="grand"><td>TOTAL</td><td class="right">{{ "%.2f"|format(sale.total) }}</td></tr>
+    <tr><td>Paid ({{ sale.payment_method }})</td><td class="right">{{ "%.2f"|format(sale.paid_amount) }}</td></tr>
+    <tr><td>Change</td><td class="right">{{ "%.2f"|format(sale.change) }}</td></tr>
+  </table>
+  <hr>
+  <div class="center">Thank you! / សូមអរគុណសម្រាប់ការគាំទ្រ!</div>
+
+  <div class="actions">
+    <button onclick="window.print()">🖨️ Print</button>
+    <a href="/receipt/{{ sale.id }}/pdf">⬇️ Download PDF</a>
+  </div>
+</body>
+</html>
