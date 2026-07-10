@@ -28,7 +28,7 @@
   <div>Cashier: {{ sale.cashier or '' }}</div>
   <hr>
   <table>
-    {% for line in sale.items %}
+    {% for line in sale['items'] %}
     <tr>
       <td colspan="2">{{ line.name }}</td>
     </tr>
