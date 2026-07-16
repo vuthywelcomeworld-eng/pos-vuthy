@@ -30,6 +30,9 @@ class Database:
         self.stock_movements = self.db["stock_movements"]  # stock in / out / adjust log
         self.users = self.db["users"]                      # login accounts
         self.counters = self.db["counters"]                # auto-increment helper
+        self.settings = self.db["settings"]                # store settings (logo, name)
+        self.cities = self.db["cities"]                     # city / province list
+        self.delivery_agents = self.db["delivery_agents"]   # delivery agent directory
 
         self._ensure_indexes()
 
@@ -40,6 +43,7 @@ class Database:
         self.sales.create_index("invoice_no", unique=True)
         self.deliveries.create_index("sale_id")
         self.users.create_index("username", unique=True)
+        self.cities.create_index("name", unique=True)
 
     def get_next_sequence(self, name: str) -> int:
         """Atomic auto-increment counter, used for invoice numbers, etc."""

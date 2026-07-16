@@ -2,20 +2,46 @@
 {% block title %}Delivery{% endblock %}
 {% block page_title %}ការដឹកជញ្ជូន (Delivery Tracking){% endblock %}
 {% block content %}
-<div class="card p-3 mb-3">
-  <div class="d-flex gap-2 flex-wrap">
-    <button class="btn btn-outline-secondary btn-sm" onclick="loadDeliveries('')">All</button>
-    <button class="btn btn-outline-warning btn-sm" onclick="loadDeliveries('pending')">Pending</button>
-    <button class="btn btn-outline-primary btn-sm" onclick="loadDeliveries('shipping')">Shipping</button>
-    <button class="btn btn-outline-success btn-sm" onclick="loadDeliveries('delivered')">Delivered</button>
-    <button class="btn btn-outline-danger btn-sm" onclick="loadDeliveries('cancelled')">Cancelled</button>
-    <a class="btn btn-outline-secondary btn-sm ms-auto" href="/api/export/deliveries?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Export</a>
+<div class="card p-2 mb-3">
+  <div class="d-flex gap-2 align-items-end flex-wrap">
+    <div>
+      <label class="form-label small mb-0">From</label>
+      <input type="date" id="del-from" class="form-control form-control-sm">
+    </div>
+    <div>
+      <label class="form-label small mb-0">To</label>
+      <input type="date" id="del-to" class="form-control form-control-sm">
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="applyFilters()"><i class="bi bi-search"></i> Apply</button>
+    <div class="d-flex gap-2 flex-wrap ms-2">
+      <button class="btn btn-outline-secondary btn-sm" onclick="setStatus('')">All</button>
+      <button class="btn btn-outline-warning btn-sm" onclick="setStatus('pending')">Pending</button>
+      <button class="btn btn-outline-primary btn-sm" onclick="setStatus('shipping')">Shipping</button>
+      <button class="btn btn-outline-success btn-sm" onclick="setStatus('delivered')">Delivered</button>
+      <button class="btn btn-outline-danger btn-sm" onclick="setStatus('cancelled')">Cancelled</button>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm ms-auto" id="export-link" href="/api/export/deliveries?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Export</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="stat-card blue"><div class="label">Total Deliveries</div><div class="value" id="sum-count">0</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card green"><div class="label">Unique Clients</div><div class="value" id="sum-clients">0</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card orange"><div class="label">Total Fee (USD)</div><div class="value" id="sum-usd">$0.00</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card red"><div class="label">Total Fee (KHR)</div><div class="value" id="sum-khr">៛0</div></div>
   </div>
 </div>
 
 <div class="card p-3">
   <table class="table table-hover align-middle">
-    <thead><tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Address</th><th>Courier</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <thead><tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Address</th><th>Agent</th><th>Fee</th><th>Status</th><th>Updated</th><th></th></tr></thead>
     <tbody id="deliveries-body"></tbody>
   </table>
 </div>
@@ -34,9 +60,20 @@
             <option value="cancelled">Cancelled</option>
           </select>
         </div>
-        <div class="mb-2"><label class="form-label">Courier</label><input class="form-control" id="d-courier"></div>
+        <div class="mb-2"><label class="form-label">Delivery Agent</label>
+          <select class="form-select" id="d-agent"><option value="">-- None --</option></select>
+        </div>
         <div class="mb-2"><label class="form-label">Address</label><input class="form-control" id="d-address"></div>
         <div class="mb-2"><label class="form-label">Phone</label><input class="form-control" id="d-phone"></div>
+        <div class="mb-2"><label class="form-label">Delivery Fee</label>
+          <div class="d-flex gap-1">
+            <input type="number" step="0.01" class="form-control" id="d-fee">
+            <select class="form-select" id="d-fee-currency" style="max-width:100px">
+              <option value="USD">USD</option>
+              <option value="KHR">KHR</option>
+            </select>
+          </div>
+        </div>
         <div class="mb-2"><label class="form-label">Notes</label><textarea class="form-control" id="d-notes"></textarea></div>
       </div>
       <div class="modal-footer"><button class="btn btn-primary" onclick="saveDelivery()">Save</button></div>
@@ -47,46 +84,97 @@
 {% block scripts %}
 <script>
 let allDeliveries = [];
-async function loadDeliveries(status=''){
-  const res = await apiFetch('/api/deliveries' + (status ? '?status='+status : ''));
+let currentStatus = '';
+
+function currentRange(){
+  const from = document.getElementById('del-from').value;
+  const to = document.getElementById('del-to').value;
+  let qs = '';
+  if(from) qs += 'from=' + from;
+  if(to) qs += (qs?'&':'') + 'to=' + to;
+  return qs;
+}
+
+function setStatus(status){
+  currentStatus = status;
+  applyFilters();
+}
+
+function applyFilters(){
+  loadDeliveries();
+  loadSummary();
+}
+
+async function loadDeliveries(){
+  let qs = currentRange();
+  if(currentStatus) qs += (qs?'&':'') + 'status=' + currentStatus;
+  const res = await apiFetch('/api/deliveries' + (qs ? '?'+qs : ''));
   allDeliveries = await res.json();
   document.getElementById('deliveries-body').innerHTML = allDeliveries.map(d => `
     <tr>
       <td>${d.invoice_no}</td><td>${d.client_name}</td><td>${d.phone||''}</td><td>${d.address||''}</td>
-      <td>${d.courier||''}</td>
+      <td>${d.agent_name||''}</td>
+      <td>${d.fee_amount ? money(d.fee_amount) + ' ' + (d.fee_currency||'USD') : '-'}</td>
       <td><span class="badge badge-status-${d.status}">${d.status}</span></td>
       <td class="small text-muted">${d.updated_at}</td>
       <td><button class="btn btn-sm btn-outline-primary" onclick="editDelivery('${d.id}')"><i class="bi bi-pencil"></i></button></td>
     </tr>
-  `).join('') || '<tr><td colspan="8" class="text-muted">No deliveries found</td></tr>';
+  `).join('') || '<tr><td colspan="9" class="text-muted">No deliveries found</td></tr>';
+}
+
+async function loadSummary(){
+  const qs = currentRange();
+  const res = await apiFetch('/api/deliveries/summary' + (qs ? '?'+qs : ''));
+  const data = await res.json();
+  document.getElementById('sum-count').innerText = data.total_deliveries;
+  document.getElementById('sum-clients').innerText = data.total_clients;
+  document.getElementById('sum-usd').innerText = '$' + money(data.total_fee_usd);
+  document.getElementById('sum-khr').innerText = '៛' + Number(data.total_fee_khr).toLocaleString();
+  document.getElementById('export-link').href = '/api/export/deliveries?format=xlsx&' + qs;
+}
+
+async function loadAgentOptions(){
+  const res = await apiFetch('/api/delivery-agents');
+  const agents = await res.json();
+  document.getElementById('d-agent').innerHTML = '<option value="">-- None --</option>' +
+    agents.map(a => `<option value="${a.id}" data-name="${a.name}">${a.name}</option>`).join('');
 }
 
 function editDelivery(id){
   const d = allDeliveries.find(x => x.id === id);
   document.getElementById('d-id').value = d.id;
   document.getElementById('d-status').value = d.status;
-  document.getElementById('d-courier').value = d.courier || '';
+  document.getElementById('d-agent').value = d.agent_id || '';
   document.getElementById('d-address').value = d.address || '';
   document.getElementById('d-phone').value = d.phone || '';
+  document.getElementById('d-fee').value = d.fee_amount || '';
+  document.getElementById('d-fee-currency').value = d.fee_currency || 'USD';
   document.getElementById('d-notes').value = d.notes || '';
   new bootstrap.Modal(document.getElementById('deliveryModal')).show();
 }
 
 async function saveDelivery(){
   const id = document.getElementById('d-id').value;
+  const agentSelect = document.getElementById('d-agent');
   const payload = {
     status: document.getElementById('d-status').value,
-    courier: document.getElementById('d-courier').value,
+    agent_id: agentSelect.value || null,
+    agent_name: agentSelect.value ? agentSelect.selectedOptions[0].dataset.name : '',
     address: document.getElementById('d-address').value,
     phone: document.getElementById('d-phone').value,
+    fee_amount: parseFloat(document.getElementById('d-fee').value) || 0,
+    fee_currency: document.getElementById('d-fee-currency').value,
     notes: document.getElementById('d-notes').value,
   };
   await apiFetch('/api/deliveries/' + id, { method:'PUT', body: JSON.stringify(payload) });
   bootstrap.Modal.getInstance(document.getElementById('deliveryModal')).hide();
   toast('Delivery updated');
   loadDeliveries();
+  loadSummary();
 }
 
+loadAgentOptions();
 loadDeliveries();
+loadSummary();
 </script>
 {% endblock %}

@@ -19,7 +19,10 @@
 </style>
 </head>
 <body>
-  <h2>POS VUTHY</h2>
+  {% if store.logo %}
+  <div class="center"><img src="{{ store.logo }}" alt="logo" style="max-height:70px; max-width:200px; margin-bottom:6px;"></div>
+  {% endif %}
+  <h2>{{ store.store_name or 'POS VUTHY' }}</h2>
   <div class="center">RECEIPT / វិក័យប័ត្រ</div>
   <hr>
   <div>Invoice: {{ sale.invoice_no }}</div>
@@ -46,6 +49,9 @@
     <tr class="grand"><td>TOTAL</td><td class="right">{{ "%.2f"|format(sale.total) }}</td></tr>
     <tr><td>Paid ({{ sale.payment_method }})</td><td class="right">{{ "%.2f"|format(sale.paid_amount) }}</td></tr>
     <tr><td>Change</td><td class="right">{{ "%.2f"|format(sale.change) }}</td></tr>
+    {% if sale.delivery_fee_amount %}
+    <tr><td>Delivery Fee</td><td class="right">{{ "%.2f"|format(sale.delivery_fee_amount) }} {{ sale.delivery_fee_currency }}</td></tr>
+    {% endif %}
   </table>
   <hr>
   <div class="center">Thank you! / សូមអរគុណសម្រាប់ការគាំទ្រ!</div>

@@ -11,8 +11,9 @@
 <body>
 <div class="d-flex">
   <nav class="sidebar d-flex flex-column p-3">
-    <a href="{{ url_for('dashboard') }}" class="brand mb-4">
-      <i class="bi bi-shop"></i> <span>POS Vuthy</span>
+    <a href="{{ url_for('dashboard') }}" class="brand mb-4 d-flex align-items-center gap-2">
+      <img id="brand-logo" src="" alt="" style="height:32px; border-radius:6px; display:none;">
+      <i id="brand-icon" class="bi bi-shop"></i> <span id="brand-name">POS Vuthy</span>
     </a>
     <ul class="nav nav-pills flex-column gap-1">
       <li class="nav-item">
@@ -48,6 +49,11 @@
       <li class="nav-item">
         <a class="nav-link {{ 'active' if request.path=='/reports' else '' }}" href="{{ url_for('reports_page') }}">
           <i class="bi bi-bar-chart-line"></i> របាយការណ៍ (Reports)
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {{ 'active' if request.path=='/settings' else '' }}" href="{{ url_for('settings_page') }}">
+          <i class="bi bi-gear"></i> ការកំណត់ (Settings)
         </a>
       </li>
     </ul>
@@ -102,6 +108,23 @@ function toast(msg, type='success'){
   document.body.appendChild(el);
   setTimeout(()=> el.remove(), 3000);
 }
+
+async function loadBrandSettings(){
+  try{
+    const res = await apiFetch('/api/settings');
+    const s = await res.json();
+    if(s.logo){
+      document.getElementById('brand-logo').src = s.logo;
+      document.getElementById('brand-logo').style.display = 'inline-block';
+      document.getElementById('brand-icon').style.display = 'none';
+    }
+    if(s.store_name){
+      document.getElementById('brand-name').innerText = s.store_name;
+      document.title = s.store_name + ' - ' + document.title;
+    }
+  }catch(e){}
+}
+loadBrandSettings();
 </script>
 {% block scripts %}{% endblock %}
 </body>

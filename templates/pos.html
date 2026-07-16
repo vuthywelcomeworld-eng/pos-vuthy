@@ -5,13 +5,20 @@
 <div class="row g-3">
   <div class="col-md-7">
     <div class="card p-3 mb-3">
-      <div class="d-flex gap-2">
+      <div class="d-flex gap-2 mb-2">
         <input type="text" id="pos-search" class="form-control" placeholder="ស្កេន ឬវាយឈ្មោះ/លេខកូដ (scan or type name/barcode)" autofocus>
         <button class="btn btn-outline-primary" onclick="openScanner()"><i class="bi bi-upc-scan"></i></button>
       </div>
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="d-flex gap-1 flex-wrap" id="category-chips"></div>
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-outline-secondary active" id="view-grid-btn" onclick="setViewMode('grid')"><i class="bi bi-grid-3x3-gap"></i> Grid</button>
+          <button class="btn btn-outline-secondary" id="view-list-btn" onclick="setViewMode('list')"><i class="bi bi-list-ul"></i> List</button>
+        </div>
+      </div>
     </div>
     <div class="card p-3">
-      <div class="row g-2" id="pos-items-grid" style="max-height: 60vh; overflow-y:auto;"></div>
+      <div class="row g-2" id="pos-items-grid" style="max-height: 55vh; overflow-y:auto;"></div>
     </div>
   </div>
 
@@ -23,7 +30,20 @@
           <option value="">Walk-in Customer</option>
         </select>
       </div>
-      <div id="cart-lines" style="flex-grow:1; overflow-y:auto; max-height: 32vh;"></div>
+      <div id="cart-lines" style="flex-grow:1; overflow-y:auto; max-height: 26vh;"></div>
+
+      <div class="border rounded p-2 mt-2 bg-light">
+        <div class="d-flex justify-content-between align-items-center">
+          <span class="small fw-semibold"><i class="bi bi-gift"></i> ទំនិញជូនអោយឥតគិតថ្លៃ (Complimentary)</span>
+        </div>
+        <div class="d-flex gap-1 mt-1">
+          <select class="form-select form-select-sm" id="comp-item-select"></select>
+          <input type="number" class="form-control form-control-sm" id="comp-item-qty" value="1" min="1" style="width:60px">
+          <button class="btn btn-sm btn-outline-success" onclick="addComplimentary()"><i class="bi bi-plus"></i></button>
+        </div>
+        <div id="comp-lines" class="mt-1"></div>
+      </div>
+
       <hr>
       <div class="d-flex justify-content-between"><span>Subtotal</span><span id="cart-subtotal">0.00</span></div>
       <div class="d-flex justify-content-between align-items-center">
@@ -62,7 +82,15 @@
       <div id="delivery-fields" class="d-none mt-1">
         <input type="text" class="form-control form-control-sm mb-1" id="delivery-phone" placeholder="Phone">
         <input type="text" class="form-control form-control-sm mb-1" id="delivery-address" placeholder="Address">
-        <input type="text" class="form-control form-control-sm" id="delivery-courier" placeholder="Courier (optional)">
+        <select class="form-select form-select-sm mb-1" id="delivery-agent"><option value="">-- Select delivery agent --</option></select>
+        <div class="d-flex gap-1">
+          <input type="number" step="0.01" class="form-control form-control-sm" id="delivery-fee" placeholder="Delivery Fee">
+          <select class="form-select form-select-sm" id="delivery-fee-currency" style="max-width:90px">
+            <option value="USD">USD</option>
+            <option value="KHR">KHR</option>
+          </select>
+        </div>
+        <div class="form-text">Delivery fee is shown in cart only — it is not counted in profit/loss.</div>
       </div>
 
       <button class="btn btn-success w-100 mt-3" onclick="checkout()"><i class="bi bi-check2-circle"></i> បញ្ចប់ការលក់ (Checkout)</button>
@@ -83,21 +111,62 @@
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
 let cart = [];
+let compCart = [];
 let allItems = [];
 let scannerInstance = null;
+let viewMode = 'grid';
+let activeCategory = 'All';
+
+async function loadCategoriesChips(){
+  const res = await apiFetch('/api/items/categories');
+  const cats = await res.json();
+  const chips = ['All', ...cats];
+  document.getElementById('category-chips').innerHTML = chips.map(c => `
+    <button class="btn btn-sm ${c===activeCategory ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setCategory('${c}')">${c}</button>
+  `).join('');
+}
+function setCategory(c){ activeCategory = c; loadCategoriesChips(); loadPosItems(document.getElementById('pos-search').value); }
+function setViewMode(mode){
+  viewMode = mode;
+  document.getElementById('view-grid-btn').classList.toggle('active', mode==='grid');
+  document.getElementById('view-list-btn').classList.toggle('active', mode==='list');
+  renderPosItems();
+}
 
 async function loadPosItems(q=''){
-  const res = await apiFetch('/api/items?q=' + encodeURIComponent(q));
+  const params = new URLSearchParams({ q, category: activeCategory });
+  const res = await apiFetch('/api/items?' + params.toString());
   allItems = await res.json();
-  document.getElementById('pos-items-grid').innerHTML = allItems.map(i => `
-    <div class="col-4 col-lg-3">
-      <div class="card pos-item-card border" onclick="addToCart('${i.id}')">
-        <div class="name">${i.name}</div>
-        <div class="price">$${money(i.price)}</div>
-        <div class="small text-muted">stock: ${i.stock}</div>
+  renderPosItems();
+  renderCompSelect();
+}
+
+function renderPosItems(){
+  if(viewMode === 'grid'){
+    document.getElementById('pos-items-grid').innerHTML = allItems.map(i => `
+      <div class="col-4 col-lg-3">
+        <div class="card pos-item-card border" onclick="addToCart('${i.id}')">
+          ${i.image ? `<img src="${i.image}" style="width:100%;height:60px;object-fit:cover;border-radius:8px;" class="mb-1">` : ''}
+          <div class="name">${i.name}</div>
+          <div class="price">$${money(i.price)}</div>
+          <div class="small text-muted">stock: ${i.stock}</div>
+        </div>
       </div>
-    </div>
-  `).join('') || '<p class="text-muted">No items found</p>';
+    `).join('') || '<p class="text-muted">No items found</p>';
+  } else {
+    document.getElementById('pos-items-grid').innerHTML = `
+      <table class="table table-sm table-hover">
+        <thead><tr><th>Name</th><th>Category</th><th>Price</th><th>Stock</th><th></th></tr></thead>
+        <tbody>
+          ${allItems.map(i => `
+            <tr style="cursor:pointer" onclick="addToCart('${i.id}')">
+              <td>${i.name}</td><td>${i.category||''}</td><td>$${money(i.price)}</td><td>${i.stock}</td>
+              <td><button class="btn btn-sm btn-outline-primary"><i class="bi bi-plus"></i></button></td>
+            </tr>
+          `).join('') || '<tr><td colspan="5" class="text-muted">No items found</td></tr>'}
+        </tbody>
+      </table>`;
+  }
 }
 
 async function loadClients(){
@@ -107,9 +176,17 @@ async function loadClients(){
   clients.forEach(c => {
     const opt = document.createElement('option');
     opt.value = c.id; opt.dataset.name = c.name;
-    opt.innerText = `${c.name} (${c.phone||''})`;
+    opt.innerText = `${c.favorite ? '⭐ ' : ''}${c.name} (${c.phone||''})`;
     select.appendChild(opt);
   });
+}
+
+async function loadDeliveryAgents(){
+  const res = await apiFetch('/api/delivery-agents');
+  const agents = await res.json();
+  const select = document.getElementById('delivery-agent');
+  select.innerHTML = '<option value="">-- Select delivery agent --</option>' +
+    agents.map(a => `<option value="${a.id}" data-name="${a.name}">${a.name} (${a.phone||''})</option>`).join('');
 }
 
 function addToCart(itemId){
@@ -130,17 +207,61 @@ function changeQty(itemId, delta){
   renderCart();
 }
 
+function updatePrice(itemId, newPrice){
+  const line = cart.find(l => l.item_id === itemId);
+  if(!line) return;
+  line.price = parseFloat(newPrice) || 0;
+  renderCart();
+}
+
 function removeLine(itemId){
   cart = cart.filter(l => l.item_id !== itemId);
   renderCart();
 }
 
+function renderCompSelect(){
+  document.getElementById('comp-item-select').innerHTML = allItems.map(i =>
+    `<option value="${i.id}">${i.name} (stock: ${i.stock})</option>`).join('');
+}
+
+function addComplimentary(){
+  const select = document.getElementById('comp-item-select');
+  const itemId = select.value;
+  const item = allItems.find(i => i.id === itemId);
+  if(!item){ toast('Select an item', 'danger'); return; }
+  const qty = parseFloat(document.getElementById('comp-item-qty').value) || 1;
+  if(qty > item.stock){ toast('Not enough stock for complimentary item', 'danger'); return; }
+  const existing = compCart.find(l => l.item_id === itemId);
+  if(existing){ existing.qty += qty; }
+  else { compCart.push({ item_id: item.id, name: item.name, qty }); }
+  renderComp();
+}
+
+function removeComp(itemId){
+  compCart = compCart.filter(l => l.item_id !== itemId);
+  renderComp();
+}
+
+function renderComp(){
+  document.getElementById('comp-lines').innerHTML = compCart.map(l => `
+    <div class="d-flex justify-content-between align-items-center small border-top pt-1 mt-1">
+      <span><i class="bi bi-gift-fill text-success"></i> ${l.name} x ${l.qty}</span>
+      <button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="removeComp('${l.item_id}')"><i class="bi bi-x"></i></button>
+    </div>
+  `).join('');
+}
+
 function renderCart(){
   document.getElementById('cart-lines').innerHTML = cart.map(l => `
     <div class="cart-line d-flex justify-content-between align-items-center">
-      <div>
+      <div style="flex:1">
         <div class="small fw-semibold">${l.name}</div>
-        <div class="small text-muted">$${money(l.price)} each</div>
+        <div class="d-flex align-items-center gap-1 mt-1">
+          <span class="small text-muted">$</span>
+          <input type="number" step="0.01" class="form-control form-control-sm" style="width:75px"
+                 value="${l.price}" onchange="updatePrice('${l.item_id}', this.value)">
+          <span class="small text-muted">each</span>
+        </div>
       </div>
       <div class="d-flex align-items-center gap-1">
         <button class="btn btn-sm btn-outline-secondary" onclick="changeQty('${l.item_id}',-1)">-</button>
@@ -169,10 +290,11 @@ function toggleDelivery(){
 }
 
 async function checkout(){
-  if(cart.length === 0){ toast('Cart is empty', 'danger'); return; }
+  if(cart.length === 0 && compCart.length === 0){ toast('Cart is empty', 'danger'); return; }
   const clientSelect = document.getElementById('pos-client');
   const payload = {
     items: cart.map(l => ({ item_id: l.item_id, qty: l.qty, price: l.price })),
+    complimentary_items: compCart.map(l => ({ item_id: l.item_id, qty: l.qty })),
     client_id: clientSelect.value || null,
     client_name: clientSelect.value ? clientSelect.selectedOptions[0].dataset.name : 'Walk-in Customer',
     discount: document.getElementById('cart-discount').value,
@@ -181,22 +303,35 @@ async function checkout(){
     paid_amount: document.getElementById('pos-paid').value,
   };
   if(document.getElementById('need-delivery').checked){
+    const agentSelect = document.getElementById('delivery-agent');
     payload.delivery = {
       phone: document.getElementById('delivery-phone').value,
       address: document.getElementById('delivery-address').value,
-      courier: document.getElementById('delivery-courier').value,
+      agent_id: agentSelect.value || null,
+      agent_name: agentSelect.value ? agentSelect.selectedOptions[0].dataset.name : '',
+      fee_amount: document.getElementById('delivery-fee').value || 0,
+      fee_currency: document.getElementById('delivery-fee-currency').value,
     };
+  }
+  if(cart.length === 0 && compCart.length > 0){
+    // gift-only order still needs at least one paid line to keep invoice meaningful; block with a clear message
+    toast('Add at least one paid item, or use Stock Adjustment for pure giveaways', 'danger');
+    return;
   }
   const res = await apiFetch('/api/sales', { method:'POST', body: JSON.stringify(payload) });
   const data = await res.json();
   if(data.error){ toast(data.error, 'danger'); return; }
   toast('Sale completed: ' + data.invoice_no);
   cart = [];
+  compCart = [];
+  renderComp();
   document.getElementById('pos-paid').value = '';
   document.getElementById('cart-discount').value = 0;
   document.getElementById('cart-tax').value = 0;
+  document.getElementById('need-delivery').checked = false;
+  toggleDelivery();
   renderCart();
-  loadPosItems();
+  loadPosItems(document.getElementById('pos-search').value);
   window.open('/receipt/' + data.id, '_blank');
 }
 
@@ -210,7 +345,7 @@ document.getElementById('pos-search').addEventListener('keydown', async e => {
       allItems = [item, ...allItems.filter(i=>i.id!==item.id)];
       addToCart(item.id);
       e.target.value = '';
-      loadPosItems();
+      renderPosItems();
     }
   }
 });
@@ -238,8 +373,10 @@ function stopScanner(){
   if(scannerInstance){ scannerInstance.stop().catch(()=>{}); scannerInstance = null; }
 }
 
+loadCategoriesChips();
 loadPosItems();
 loadClients();
+loadDeliveryAgents();
 renderCart();
 </script>
 {% endblock %}

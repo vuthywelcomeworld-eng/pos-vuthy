@@ -2,29 +2,72 @@
 {% block title %}Dashboard{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 {% block content %}
+<div class="card p-2 mb-3">
+  <div class="d-flex gap-2 align-items-end flex-wrap">
+    <div>
+      <label class="form-label small mb-0">From</label>
+      <input type="date" id="dash-from" class="form-control form-control-sm">
+    </div>
+    <div>
+      <label class="form-label small mb-0">To</label>
+      <input type="date" id="dash-to" class="form-control form-control-sm">
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="loadDashboard()"><i class="bi bi-search"></i> Apply</button>
+    <button class="btn btn-outline-secondary btn-sm" onclick="resetToday()"><i class="bi bi-calendar-day"></i> Today</button>
+    <span class="text-muted small ms-auto" id="dash-range-label">Showing: Today</span>
+  </div>
+</div>
+
 <div class="row g-3 mb-4">
   <div class="col-md-3">
     <div class="stat-card blue">
-      <div class="label"><i class="bi bi-cash-coin"></i> ចំណូលថ្ងៃនេះ (Today Revenue)</div>
+      <div class="label"><i class="bi bi-cash-coin"></i> ចំណូល (Revenue)</div>
       <div class="value" id="stat-revenue">0.00</div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card green">
-      <div class="label"><i class="bi bi-receipt"></i> ការបញ្ជាទិញថ្ងៃនេះ (Orders)</div>
-      <div class="value" id="stat-orders">0</div>
+      <div class="label"><i class="bi bi-graph-up-arrow"></i> ចំណេញសុទ្ធ (Net Profit)</div>
+      <div class="value" id="stat-profit">0.00</div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card orange">
+      <div class="label"><i class="bi bi-receipt"></i> ការបញ្ជាទិញ (Orders)</div>
+      <div class="value" id="stat-orders">0</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card red">
+      <div class="label"><i class="bi bi-percent"></i> Margin %</div>
+      <div class="value" id="stat-margin">0%</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card blue">
       <div class="label"><i class="bi bi-box-seam"></i> ចំនួនទំនិញ (Items)</div>
       <div class="value" id="stat-items">0</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card green">
+      <div class="label"><i class="bi bi-people"></i> អតិថិជន (Clients)</div>
+      <div class="value" id="stat-clients">0</div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card red">
       <div class="label"><i class="bi bi-truck"></i> កំពុងដឹកជញ្ជូន (Pending Delivery)</div>
       <div class="value" id="stat-deliveries">0</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card orange">
+      <div class="label"><i class="bi bi-cash-stack"></i> ថ្លៃដើមសរុប (Cost)</div>
+      <div class="value" id="stat-cost">0.00</div>
     </div>
   </div>
 </div>
@@ -45,7 +88,13 @@
 </div>
 
 <div class="row g-3 mt-1">
-  <div class="col-12">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h6><i class="bi bi-geo-alt"></i> អតិថិជនតាមទីតាំង (Clients by City/Province)</h6>
+      <canvas id="cityChart" height="200"></canvas>
+    </div>
+  </div>
+  <div class="col-md-6">
     <div class="card p-3">
       <h6 class="text-danger"><i class="bi bi-exclamation-triangle"></i> ស្តុកជិតអស់ (Low Stock Alert)</h6>
       <table class="table table-sm">
@@ -59,21 +108,41 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script>
+let trendChartInstance = null, topItemsChartInstance = null, cityChartInstance = null;
+
+function resetToday(){
+  document.getElementById('dash-from').value = '';
+  document.getElementById('dash-to').value = '';
+  loadDashboard();
+}
+
 async function loadDashboard(){
-  const res = await apiFetch('/api/dashboard/summary');
+  const from = document.getElementById('dash-from').value;
+  const to = document.getElementById('dash-to').value;
+  let qs = '';
+  if(from) qs += 'from=' + from;
+  if(to) qs += (qs?'&':'') + 'to=' + to;
+  document.getElementById('dash-range-label').innerText = (from || to) ? `Showing: ${from||'...'} to ${to||'...'}` : 'Showing: Today';
+
+  const res = await apiFetch('/api/dashboard/summary' + (qs ? '?'+qs : ''));
   const data = await res.json();
 
-  document.getElementById('stat-revenue').innerText = money(data.today_revenue);
-  document.getElementById('stat-orders').innerText = data.today_orders;
+  document.getElementById('stat-revenue').innerText = money(data.period_revenue);
+  document.getElementById('stat-profit').innerText = money(data.period_profit);
+  document.getElementById('stat-orders').innerText = data.period_orders;
+  document.getElementById('stat-margin').innerText = data.margin_pct + '%';
   document.getElementById('stat-items').innerText = data.total_items;
+  document.getElementById('stat-clients').innerText = data.total_clients;
   document.getElementById('stat-deliveries').innerText = data.pending_deliveries;
+  document.getElementById('stat-cost').innerText = money(data.period_cost);
 
   const lowStockBody = document.getElementById('low-stock-body');
   lowStockBody.innerHTML = data.low_stock.map(i => `
     <tr><td>${i.name}</td><td>${i.sku||''}</td><td class="text-danger fw-bold">${i.stock}</td></tr>
   `).join('') || '<tr><td colspan="3" class="text-muted">No low stock items</td></tr>';
 
-  new Chart(document.getElementById('trendChart'), {
+  if(trendChartInstance) trendChartInstance.destroy();
+  trendChartInstance = new Chart(document.getElementById('trendChart'), {
     type: 'line',
     data: {
       labels: data.trend.map(t => t.month),
@@ -83,13 +152,24 @@ async function loadDashboard(){
     options: { plugins: { legend: { display: false } } }
   });
 
-  new Chart(document.getElementById('topItemsChart'), {
+  if(topItemsChartInstance) topItemsChartInstance.destroy();
+  topItemsChartInstance = new Chart(document.getElementById('topItemsChart'), {
     type: 'doughnut',
     data: {
       labels: data.top_items.map(t => t.name),
       datasets: [{ data: data.top_items.map(t => t.qty),
         backgroundColor: ['#4f46e5','#059669','#f59e0b','#ef4444','#3b82f6'] }]
     }
+  });
+
+  if(cityChartInstance) cityChartInstance.destroy();
+  cityChartInstance = new Chart(document.getElementById('cityChart'), {
+    type: 'bar',
+    data: {
+      labels: data.city_data.map(c => c.city),
+      datasets: [{ label: 'Clients', data: data.city_data.map(c => c.count), backgroundColor: '#4f46e5' }]
+    },
+    options: { indexAxis: 'y', plugins: { legend: { display: false } } }
   });
 }
 loadDashboard();

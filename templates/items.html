@@ -4,7 +4,12 @@
 {% block content %}
 <div class="card p-3 mb-3">
   <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <input type="text" id="search-box" class="form-control" style="max-width:300px" placeholder="ស្វែងរក... (search name/sku/barcode)">
+    <div class="d-flex gap-2 flex-wrap">
+      <input type="text" id="search-box" class="form-control" style="max-width:240px" placeholder="ស្វែងរក... (search name/sku/barcode)">
+      <select class="form-select" id="category-filter" style="max-width:180px" onchange="loadItems(document.getElementById('search-box').value)">
+        <option value="All">All Categories</option>
+      </select>
+    </div>
     <div class="d-flex gap-2">
       <a class="btn btn-outline-secondary" href="/api/export/items?format=csv"><i class="bi bi-filetype-csv"></i> CSV</a>
       <a class="btn btn-outline-secondary" href="/api/export/items?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Excel</a>
@@ -18,7 +23,14 @@
 <div class="card p-3">
   <table class="table table-hover align-middle">
     <thead><tr>
-      <th>Name</th><th>SKU</th><th>Barcode</th><th>Category</th><th>Price</th><th>Cost</th><th>Stock</th><th></th>
+      <th style="width:50px">Image</th>
+      <th class="sortable" onclick="setSort('name')" style="cursor:pointer">Name <i class="bi bi-arrow-down-up small"></i></th>
+      <th>SKU</th><th>Barcode</th>
+      <th class="sortable" onclick="setSort('category')" style="cursor:pointer">Category <i class="bi bi-arrow-down-up small"></i></th>
+      <th class="sortable" onclick="setSort('price')" style="cursor:pointer">Price <i class="bi bi-arrow-down-up small"></i></th>
+      <th class="sortable" onclick="setSort('cost')" style="cursor:pointer">Cost <i class="bi bi-arrow-down-up small"></i></th>
+      <th class="sortable" onclick="setSort('stock')" style="cursor:pointer">Stock <i class="bi bi-arrow-down-up small"></i></th>
+      <th></th>
     </tr></thead>
     <tbody id="items-body"></tbody>
   </table>
@@ -34,6 +46,10 @@
       </div>
       <div class="modal-body">
         <input type="hidden" id="item-id">
+        <div class="text-center mb-2">
+          <img id="item-image-preview" src="" style="max-height:100px; display:none; border-radius:8px;" class="mb-2">
+          <input type="file" class="form-control form-control-sm" id="item-image-file" accept="image/*">
+        </div>
         <div class="mb-2"><label class="form-label">Name*</label><input class="form-control" id="item-name"></div>
         <div class="row">
           <div class="col-6 mb-2"><label class="form-label">SKU</label><input class="form-control" id="item-sku"></div>
@@ -45,9 +61,10 @@
           </div>
         </div>
         <div class="row">
-          <div class="col-6 mb-2"><label class="form-label">Category</label><input class="form-control" id="item-category"></div>
+          <div class="col-6 mb-2"><label class="form-label">Category</label><input class="form-control" id="item-category" list="category-datalist"></div>
           <div class="col-6 mb-2"><label class="form-label">Unit</label><input class="form-control" id="item-unit" value="pcs"></div>
         </div>
+        <datalist id="category-datalist"></datalist>
         <div class="row">
           <div class="col-4 mb-2"><label class="form-label">Price*</label><input type="number" step="0.01" class="form-control" id="item-price"></div>
           <div class="col-4 mb-2"><label class="form-label">Cost</label><input type="number" step="0.01" class="form-control" id="item-cost"></div>
@@ -89,21 +106,53 @@
 <script>
 let allItems = [];
 let scannerInstance = null;
-let scannerTargetField = null;
+let uploadedItemImage = null;
+let sortBy = 'name', sortDir = 'asc';
+
+function setSort(field){
+  if(sortBy === field){ sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }
+  else { sortBy = field; sortDir = 'asc'; }
+  loadItems(document.getElementById('search-box').value);
+}
+
+async function loadCategories(){
+  const res = await apiFetch('/api/items/categories');
+  const cats = await res.json();
+  const filterSel = document.getElementById('category-filter');
+  const current = filterSel.value;
+  filterSel.innerHTML = '<option value="All">All Categories</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+  filterSel.value = current || 'All';
+  document.getElementById('category-datalist').innerHTML = cats.map(c => `<option value="${c}">`).join('');
+}
 
 async function loadItems(q=''){
-  const res = await apiFetch('/api/items?q=' + encodeURIComponent(q));
+  const category = document.getElementById('category-filter').value;
+  const params = new URLSearchParams({ q, category, sort_by: sortBy, sort_dir: sortDir });
+  const res = await apiFetch('/api/items?' + params.toString());
   allItems = await res.json();
   document.getElementById('items-body').innerHTML = allItems.map(i => `
     <tr>
+      <td>${i.image ? `<img src="${i.image}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;">` : '<i class="bi bi-image text-muted"></i>'}</td>
       <td>${i.name}</td><td>${i.sku||''}</td><td>${i.barcode||''}</td><td>${i.category||''}</td>
       <td>${money(i.price)}</td><td>${money(i.cost)}</td>
       <td class="${i.stock<=5?'text-danger fw-bold':''}">${i.stock}</td>
       <td><button class="btn btn-sm btn-outline-primary" onclick="editItem('${i.id}')"><i class="bi bi-pencil"></i></button></td>
     </tr>
-  `).join('');
+  `).join('') || '<tr><td colspan="8" class="text-muted">No items found</td></tr>';
 }
 document.getElementById('search-box').addEventListener('input', e => loadItems(e.target.value));
+
+document.getElementById('item-image-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    uploadedItemImage = reader.result;
+    document.getElementById('item-image-preview').src = uploadedItemImage;
+    document.getElementById('item-image-preview').style.display = 'inline-block';
+  };
+  reader.readAsDataURL(file);
+});
 
 function openNewItem(){
   document.getElementById('itemModalTitle').innerText = 'Add Item';
@@ -111,6 +160,9 @@ function openNewItem(){
     .forEach(id => document.getElementById(id).value = '');
   document.getElementById('item-unit').value = 'pcs';
   document.getElementById('btn-delete-item').classList.add('d-none');
+  uploadedItemImage = null;
+  document.getElementById('item-image-preview').style.display = 'none';
+  document.getElementById('item-image-file').value = '';
 }
 
 function editItem(id){
@@ -126,6 +178,14 @@ function editItem(id){
   document.getElementById('item-cost').value = item.cost;
   document.getElementById('item-stock').value = item.stock;
   document.getElementById('btn-delete-item').classList.remove('d-none');
+  uploadedItemImage = item.image || null;
+  document.getElementById('item-image-file').value = '';
+  if(item.image){
+    document.getElementById('item-image-preview').src = item.image;
+    document.getElementById('item-image-preview').style.display = 'inline-block';
+  } else {
+    document.getElementById('item-image-preview').style.display = 'none';
+  }
   new bootstrap.Modal(document.getElementById('itemModal')).show();
 }
 
@@ -140,16 +200,19 @@ async function saveItem(){
     price: document.getElementById('item-price').value,
     cost: document.getElementById('item-cost').value,
     stock: document.getElementById('item-stock').value,
+    image: uploadedItemImage || '',
   };
   if(!payload.name || !payload.price){ toast('Name and price are required', 'danger'); return; }
 
-  if(id){
-    await apiFetch('/api/items/' + id, { method:'PUT', body: JSON.stringify(payload) });
-  } else {
-    await apiFetch('/api/items', { method:'POST', body: JSON.stringify(payload) });
-  }
+  const res = id
+    ? await apiFetch('/api/items/' + id, { method:'PUT', body: JSON.stringify(payload) })
+    : await apiFetch('/api/items', { method:'POST', body: JSON.stringify(payload) });
+  const data = await res.json();
+  if(res.status === 409){ toast(data.message || 'Duplicate item', 'danger'); return; }
+
   bootstrap.Modal.getInstance(document.getElementById('itemModal')).hide();
   toast('Item saved');
+  loadCategories();
   loadItems();
 }
 
@@ -178,6 +241,7 @@ function openScanner(targetFieldId){
   document.getElementById('scannerModal').addEventListener('shown.bs.modal', startScanner, { once:true });
   document.getElementById('scannerModal').addEventListener('hidden.bs.modal', stopScanner, { once:true });
 }
+let scannerTargetField = null;
 function startScanner(){
   scannerInstance = new Html5Qrcode("scanner-box");
   scannerInstance.start({ facingMode:"environment" }, { fps:10, qrbox:220 }, (decodedText) => {
@@ -189,6 +253,7 @@ function stopScanner(){
   if(scannerInstance){ scannerInstance.stop().catch(()=>{}); scannerInstance = null; }
 }
 
+loadCategories();
 loadItems();
 </script>
 {% endblock %}

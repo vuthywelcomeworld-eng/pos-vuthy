@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import base64
 from datetime import datetime, timedelta
 
@@ -22,9 +23,17 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 LOW_STOCK_THRESHOLD = int(os.environ.get("LOW_STOCK_THRESHOLD", 5))
 
+DEFAULT_CITIES = [
+    "Phnom Penh", "Kandal", "Siem Reap", "Battambang", "Kampong Cham",
+    "Kampong Thom", "Kampong Chhnang", "Kampong Speu", "Kampot", "Kep",
+    "Koh Kong", "Kratie", "Mondulkiri", "Oddar Meanchey", "Pailin",
+    "Preah Vihear", "Prey Veng", "Pursat", "Ratanakiri", "Sihanoukville",
+    "Stung Treng", "Svay Rieng", "Takeo", "Banteay Meanchey", "Tboung Khmum",
+]
+
 
 # ----------------------------------------------------------------------------
-# Bootstrap a default admin account on first run
+# Bootstrap defaults on first run
 # ----------------------------------------------------------------------------
 def seed_admin():
     if db.users.count_documents({}) == 0:
@@ -37,7 +46,73 @@ def seed_admin():
         })
 
 
+def seed_cities():
+    if db.cities.count_documents({}) == 0:
+        db.cities.insert_many([{"name": c, "created_at": datetime.utcnow()} for c in DEFAULT_CITIES])
+
+
 seed_admin()
+seed_cities()
+
+
+# ----------------------------------------------------------------------------
+# Small helpers
+# ----------------------------------------------------------------------------
+def _item_duplicate_exists(name, barcode, sku, exclude_id=None):
+    conditions = []
+    if name:
+        conditions.append({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
+    if barcode:
+        conditions.append({"barcode": barcode})
+    if sku:
+        conditions.append({"sku": sku})
+    if not conditions:
+        return False
+    query = {"$or": conditions}
+    if exclude_id:
+        query["_id"] = {"$ne": exclude_id}
+    return db.items.find_one(query) is not None
+
+
+def _client_phone_exists(phone, exclude_id=None):
+    if not phone:
+        return False
+    query = {"phone": phone}
+    if exclude_id:
+        query["_id"] = {"$ne": exclude_id}
+    return db.clients.find_one(query) is not None
+
+
+def _sale_cost_and_profit(sale):
+    """Returns (total_cost, gross_profit) for a sale doc, falling back to current
+    item cost for older sales created before cost-tracking was added."""
+    if "total_cost" in sale and "gross_profit" in sale:
+        return sale["total_cost"], sale["gross_profit"]
+    total_cost = 0.0
+    for line in sale.get("items", []):
+        if "cost_subtotal" in line:
+            total_cost += line["cost_subtotal"]
+        else:
+            item = db.items.find_one({"_id": line.get("item_id")}, {"cost": 1})
+            cost = float(item.get("cost", 0)) if item else 0.0
+            total_cost += cost * line.get("qty", 0)
+    taxable = max(sale.get("subtotal", 0) - sale.get("discount", 0), 0)
+    gross_profit = round(taxable - total_cost, 2)
+    return round(total_cost, 2), gross_profit
+
+
+def _date_range_args(default_today=True):
+    """Parses ?from=&to= query params into (start, end) datetimes.
+    If neither is given and default_today is True, defaults to today's range."""
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    if not date_from and not date_to and default_today:
+        start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return start, end
+    start = datetime.strptime(date_from, "%Y-%m-%d") if date_from else datetime(2000, 1, 1)
+    end = (datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)) if date_to else datetime.utcnow() + timedelta(days=1)
+    return start, end
 
 
 # ----------------------------------------------------------------------------
@@ -110,6 +185,12 @@ def reports_page():
     return render_template("reports.html")
 
 
+@app.route("/settings")
+@login_required
+def settings_page():
+    return render_template("settings.html")
+
+
 @app.route("/receipt/<sale_id>")
 @login_required
 def receipt_page(sale_id):
@@ -117,7 +198,109 @@ def receipt_page(sale_id):
     sale = db.sales.find_one({"_id": oid}) if oid else None
     if not sale:
         return "Sale not found", 404
-    return render_template("receipt.html", sale=to_json_safe(sale))
+    store = db.settings.find_one({"_id": "store"}) or {}
+    return render_template("receipt.html", sale=to_json_safe(sale), store=to_json_safe(store))
+
+
+# ----------------------------------------------------------------------------
+# API : SETTINGS (store logo / name)
+# ----------------------------------------------------------------------------
+@app.route("/api/settings", methods=["GET"])
+@login_required
+def api_settings_get():
+    s = db.settings.find_one({"_id": "store"}) or {}
+    return jsonify(to_json_safe(s))
+
+
+@app.route("/api/settings", methods=["POST"])
+@login_required
+def api_settings_update():
+    data = request.get_json(force=True)
+    update = {}
+    if "logo" in data:
+        update["logo"] = data["logo"]
+    if "store_name" in data:
+        update["store_name"] = data.get("store_name", "").strip()
+    db.settings.update_one({"_id": "store"}, {"$set": update}, upsert=True)
+    return jsonify({"ok": True})
+
+
+# ----------------------------------------------------------------------------
+# API : CITIES / PROVINCES
+# ----------------------------------------------------------------------------
+@app.route("/api/cities", methods=["GET"])
+@login_required
+def api_cities_list():
+    cities = list(db.cities.find().sort("name", 1))
+    return jsonify([c["name"] for c in cities])
+
+
+@app.route("/api/cities", methods=["POST"])
+@login_required
+def api_cities_create():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+    existing = db.cities.find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
+    if existing:
+        return jsonify({"error": "duplicate", "message": "City already exists"}), 409
+    db.cities.insert_one({"name": name, "created_at": datetime.utcnow()})
+    return jsonify({"ok": True, "name": name}), 201
+
+
+# ----------------------------------------------------------------------------
+# API : DELIVERY AGENTS
+# ----------------------------------------------------------------------------
+@app.route("/api/delivery-agents", methods=["GET"])
+@login_required
+def api_agents_list():
+    agents = list(db.delivery_agents.find().sort("name", 1))
+    return jsonify(to_json_safe(agents))
+
+
+@app.route("/api/delivery-agents", methods=["POST"])
+@login_required
+def api_agents_create():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+    doc = {
+        "name": name,
+        "phone": data.get("phone", "").strip(),
+        "vehicle": data.get("vehicle", "").strip(),
+        "active": True,
+        "created_at": datetime.utcnow(),
+    }
+    result = db.delivery_agents.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return jsonify(to_json_safe(doc)), 201
+
+
+@app.route("/api/delivery-agents/<agent_id>", methods=["PUT"])
+@login_required
+def api_agents_update(agent_id):
+    oid = parse_object_id(agent_id)
+    if not oid:
+        return jsonify({"error": "invalid_id"}), 400
+    data = request.get_json(force=True)
+    update = {}
+    for f in ("name", "phone", "vehicle", "active"):
+        if f in data:
+            update[f] = data[f]
+    db.delivery_agents.update_one({"_id": oid}, {"$set": update})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/delivery-agents/<agent_id>", methods=["DELETE"])
+@login_required
+def api_agents_delete(agent_id):
+    oid = parse_object_id(agent_id)
+    if not oid:
+        return jsonify({"error": "invalid_id"}), 400
+    db.delivery_agents.delete_one({"_id": oid})
+    return jsonify({"ok": True})
 
 
 # ----------------------------------------------------------------------------
@@ -127,16 +310,38 @@ def receipt_page(sale_id):
 @login_required
 def api_items_list():
     q = request.args.get("q", "").strip()
-    query = {}
+    category = request.args.get("category", "").strip()
+    sort_by = request.args.get("sort_by", "name")
+    sort_dir = -1 if request.args.get("sort_dir", "asc") == "desc" else 1
+
+    conditions = []
     if q:
-        query = {"$or": [
+        conditions.append({"$or": [
             {"name": {"$regex": q, "$options": "i"}},
             {"sku": {"$regex": q, "$options": "i"}},
             {"barcode": {"$regex": q, "$options": "i"}},
             {"category": {"$regex": q, "$options": "i"}},
-        ]}
-    items = list(db.items.find(query).sort("name", 1))
+        ]})
+    if category and category != "All":
+        conditions.append({"category": category})
+    query = {}
+    if len(conditions) == 1:
+        query = conditions[0]
+    elif len(conditions) > 1:
+        query = {"$and": conditions}
+
+    allowed_sort = {"name", "price", "cost", "stock", "category", "sku"}
+    if sort_by not in allowed_sort:
+        sort_by = "name"
+    items = list(db.items.find(query).sort(sort_by, sort_dir))
     return jsonify(to_json_safe(items))
+
+
+@app.route("/api/items/categories", methods=["GET"])
+@login_required
+def api_items_categories():
+    cats = db.items.distinct("category")
+    return jsonify(sorted([c for c in cats if c]))
 
 
 @app.route("/api/items/lookup/<code>", methods=["GET"])
@@ -153,10 +358,18 @@ def api_items_lookup(code):
 @login_required
 def api_items_create():
     data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    barcode = data.get("barcode", "").strip()
+    sku = data.get("sku", "").strip()
+
+    if _item_duplicate_exists(name, barcode, sku):
+        return jsonify({"error": "duplicate_item",
+                         "message": "An item with this name, SKU, or barcode already exists"}), 409
+
     doc = {
-        "name": data.get("name", "").strip(),
-        "sku": data.get("sku", "").strip(),
-        "barcode": data.get("barcode", "").strip(),
+        "name": name,
+        "sku": sku,
+        "barcode": barcode,
         "category": data.get("category", "").strip() or "General",
         "unit": data.get("unit", "pcs"),
         "price": float(data.get("price", 0) or 0),
@@ -188,16 +401,26 @@ def api_items_update(item_id):
     if not oid:
         return jsonify({"error": "invalid_id"}), 400
     data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    barcode = data.get("barcode", "").strip()
+    sku = data.get("sku", "").strip()
+
+    if _item_duplicate_exists(name, barcode, sku, exclude_id=oid):
+        return jsonify({"error": "duplicate_item",
+                         "message": "Another item with this name, SKU, or barcode already exists"}), 409
+
     update = {
-        "name": data.get("name", "").strip(),
-        "sku": data.get("sku", "").strip(),
-        "barcode": data.get("barcode", "").strip(),
+        "name": name,
+        "sku": sku,
+        "barcode": barcode,
         "category": data.get("category", "").strip() or "General",
         "unit": data.get("unit", "pcs"),
         "price": float(data.get("price", 0) or 0),
         "cost": float(data.get("cost", 0) or 0),
         "updated_at": datetime.utcnow(),
     }
+    if "image" in data:
+        update["image"] = data["image"]
     db.items.update_one({"_id": oid}, {"$set": update})
     return jsonify({"ok": True})
 
@@ -281,14 +504,44 @@ def api_stock_movements():
 @login_required
 def api_clients_list():
     q = request.args.get("q", "").strip()
+    sort_by = request.args.get("sort_by", "name")
+    sort_dir = request.args.get("sort_dir", "asc")
     query = {}
     if q:
         query = {"$or": [
             {"name": {"$regex": q, "$options": "i"}},
             {"phone": {"$regex": q, "$options": "i"}},
             {"code": {"$regex": q, "$options": "i"}},
+            {"city": {"$regex": q, "$options": "i"}},
         ]}
-    clients = list(db.clients.find(query).sort("name", 1))
+    clients = list(db.clients.find(query))
+
+    # attach purchase stats
+    counts = db.sales.aggregate([
+        {"$match": {"client_id": {"$ne": None}}},
+        {"$group": {"_id": "$client_id", "count": {"$sum": 1}, "total_spent": {"$sum": "$total"}}},
+    ])
+    counts_map = {str(c["_id"]): c for c in counts}
+    for c in clients:
+        stat = counts_map.get(str(c["_id"]), {})
+        c["purchase_count"] = stat.get("count", 0)
+        c["total_spent"] = round(stat.get("total_spent", 0), 2)
+        c["favorite"] = c.get("favorite", False)
+
+    allowed_sort = {"name", "purchase_count", "total_spent", "created_at", "city"}
+    if sort_by not in allowed_sort:
+        sort_by = "name"
+    reverse = sort_dir == "desc"
+    clients.sort(key=lambda c: (not c["favorite"], c.get(sort_by) or ""), reverse=False)
+    if sort_by != "name" or reverse:
+        # secondary stable sort by requested field/direction, favorites still pinned first
+        favorites = [c for c in clients if c["favorite"]]
+        others = [c for c in clients if not c["favorite"]]
+        key_fn = lambda c: (c.get(sort_by) if c.get(sort_by) is not None else "")
+        favorites.sort(key=key_fn, reverse=reverse)
+        others.sort(key=key_fn, reverse=reverse)
+        clients = favorites + others
+
     return jsonify(to_json_safe(clients))
 
 
@@ -296,14 +549,22 @@ def api_clients_list():
 @login_required
 def api_clients_create():
     data = request.get_json(force=True)
+    phone = data.get("phone", "").strip()
+
+    if _client_phone_exists(phone):
+        return jsonify({"error": "duplicate_phone",
+                         "message": "A client with this phone number already exists"}), 409
+
     seq = db.get_next_sequence("client")
     doc = {
         "code": f"C{seq:05d}",
         "name": data.get("name", "").strip(),
-        "phone": data.get("phone", "").strip(),
+        "phone": phone,
         "email": data.get("email", "").strip(),
         "address": data.get("address", "").strip(),
+        "city": data.get("city", "").strip(),
         "notes": data.get("notes", ""),
+        "favorite": False,
         "created_at": datetime.utcnow(),
     }
     result = db.clients.insert_one(doc)
@@ -318,11 +579,18 @@ def api_clients_update(client_id):
     if not oid:
         return jsonify({"error": "invalid_id"}), 400
     data = request.get_json(force=True)
+    phone = data.get("phone", "").strip()
+
+    if _client_phone_exists(phone, exclude_id=oid):
+        return jsonify({"error": "duplicate_phone",
+                         "message": "Another client with this phone number already exists"}), 409
+
     update = {
         "name": data.get("name", "").strip(),
-        "phone": data.get("phone", "").strip(),
+        "phone": phone,
         "email": data.get("email", "").strip(),
         "address": data.get("address", "").strip(),
+        "city": data.get("city", "").strip(),
         "notes": data.get("notes", ""),
     }
     db.clients.update_one({"_id": oid}, {"$set": update})
@@ -337,6 +605,34 @@ def api_clients_delete(client_id):
         return jsonify({"error": "invalid_id"}), 400
     db.clients.delete_one({"_id": oid})
     return jsonify({"ok": True})
+
+
+@app.route("/api/clients/<client_id>/favorite", methods=["POST"])
+@login_required
+def api_clients_toggle_favorite(client_id):
+    oid = parse_object_id(client_id)
+    if not oid:
+        return jsonify({"error": "invalid_id"}), 400
+    client = db.clients.find_one({"_id": oid})
+    if not client:
+        return jsonify({"error": "not_found"}), 404
+    new_val = not client.get("favorite", False)
+    db.clients.update_one({"_id": oid}, {"$set": {"favorite": new_val}})
+    return jsonify({"ok": True, "favorite": new_val})
+
+
+@app.route("/api/clients/<client_id>/purchases", methods=["GET"])
+@login_required
+def api_clients_purchases(client_id):
+    oid = parse_object_id(client_id)
+    if not oid:
+        return jsonify({"error": "invalid_id"}), 400
+    sales = list(db.sales.find({"client_id": oid}).sort("created_at", -1))
+    total_spent = round(sum(s.get("total", 0) for s in sales), 2)
+    return jsonify({
+        "sales": to_json_safe(sales),
+        "summary": {"total_orders": len(sales), "total_spent": total_spent},
+    })
 
 
 # ----------------------------------------------------------------------------
@@ -378,6 +674,7 @@ def api_sales_create():
 
     line_items = []
     subtotal = 0.0
+    total_cost = 0.0
     for line in cart:
         oid = parse_object_id(line["item_id"])
         item = db.items.find_one({"_id": oid})
@@ -386,13 +683,30 @@ def api_sales_create():
         qty = float(line.get("qty", 1))
         if item["stock"] < qty:
             return jsonify({"error": f"insufficient_stock:{item['name']}"}), 400
+        # allow the cashier to override the unit price at checkout time
         price = float(line.get("price", item["price"]))
+        cost = float(item.get("cost", 0) or 0)
         line_total = round(price * qty, 2)
+        cost_subtotal = round(cost * qty, 2)
         subtotal += line_total
+        total_cost += cost_subtotal
         line_items.append({
             "item_id": item["_id"], "name": item["name"], "sku": item.get("sku", ""),
             "qty": qty, "price": price, "subtotal": line_total,
+            "cost": cost, "cost_subtotal": cost_subtotal,
         })
+
+    # complimentary / free gift items: deduct stock only, excluded from revenue & profit
+    comp_items = []
+    for line in data.get("complimentary_items", []):
+        oid = parse_object_id(line["item_id"])
+        item = db.items.find_one({"_id": oid})
+        if not item:
+            continue
+        qty = float(line.get("qty", 1))
+        if item["stock"] < qty:
+            return jsonify({"error": f"insufficient_stock:{item['name']} (complimentary)"}), 400
+        comp_items.append({"item_id": item["_id"], "name": item["name"], "qty": qty})
 
     discount = float(data.get("discount", 0) or 0)
     tax_rate = float(data.get("tax_rate", 0) or 0)
@@ -401,6 +715,11 @@ def api_sales_create():
     total = round(taxable + tax, 2)
     paid_amount = float(data.get("paid_amount", total) or total)
     change = round(paid_amount - total, 2)
+    gross_profit = round(taxable - total_cost, 2)  # revenue after discount, before tax, minus cost of goods
+
+    delivery_data = data.get("delivery") or {}
+    delivery_fee_amount = float(delivery_data.get("fee_amount", 0) or 0)
+    delivery_fee_currency = delivery_data.get("fee_currency", "USD")
 
     seq = db.get_next_sequence("invoice")
     sale_doc = {
@@ -408,14 +727,19 @@ def api_sales_create():
         "client_id": parse_object_id(data.get("client_id")) if data.get("client_id") else None,
         "client_name": data.get("client_name", "Walk-in Customer"),
         "items": line_items,
+        "complimentary_items": comp_items,
         "subtotal": round(subtotal, 2),
         "discount": discount,
         "tax_rate": tax_rate,
         "tax": tax,
         "total": total,
+        "total_cost": round(total_cost, 2),
+        "gross_profit": gross_profit,
         "payment_method": data.get("payment_method", "cash"),
         "paid_amount": paid_amount,
         "change": change,
+        "delivery_fee_amount": delivery_fee_amount,
+        "delivery_fee_currency": delivery_fee_currency,
         "status": "completed",
         "cashier": session.get("name"),
         "created_at": datetime.utcnow(),
@@ -423,7 +747,7 @@ def api_sales_create():
     result = db.sales.insert_one(sale_doc)
     sale_doc["_id"] = result.inserted_id
 
-    # decrement stock + log movements
+    # decrement stock + log movements for paid items
     for line in line_items:
         db.items.update_one({"_id": line["item_id"]}, {"$inc": {"stock": -line["qty"]}})
         db.stock_movements.insert_one({
@@ -432,18 +756,30 @@ def api_sales_create():
             "created_at": datetime.utcnow(), "user": session.get("username"),
         })
 
+    # decrement stock for complimentary items (no revenue/profit impact)
+    for line in comp_items:
+        db.items.update_one({"_id": line["item_id"]}, {"$inc": {"stock": -line["qty"]}})
+        db.stock_movements.insert_one({
+            "item_id": line["item_id"], "item_name": line["name"], "type": "out",
+            "qty": line["qty"], "reason": f"Complimentary gift - Sale {sale_doc['invoice_no']}",
+            "created_at": datetime.utcnow(), "user": session.get("username"),
+        })
+
     # optional delivery record
-    if data.get("delivery"):
-        d = data["delivery"]
+    if delivery_data:
+        agent_id = parse_object_id(delivery_data.get("agent_id")) if delivery_data.get("agent_id") else None
         db.deliveries.insert_one({
             "sale_id": result.inserted_id,
             "invoice_no": sale_doc["invoice_no"],
             "client_name": sale_doc["client_name"],
-            "phone": d.get("phone", ""),
-            "address": d.get("address", ""),
-            "courier": d.get("courier", ""),
+            "phone": delivery_data.get("phone", ""),
+            "address": delivery_data.get("address", ""),
+            "agent_id": agent_id,
+            "agent_name": delivery_data.get("agent_name", ""),
+            "fee_amount": delivery_fee_amount,
+            "fee_currency": delivery_fee_currency,
             "status": "pending",
-            "notes": d.get("notes", ""),
+            "notes": delivery_data.get("notes", ""),
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         })
@@ -458,9 +794,45 @@ def api_sales_create():
 @login_required
 def api_deliveries_list():
     status = request.args.get("status")
-    query = {"status": status} if status else {}
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    query = {}
+    if status:
+        query["status"] = status
+    if date_from or date_to:
+        query["created_at"] = {}
+        if date_from:
+            query["created_at"]["$gte"] = datetime.strptime(date_from, "%Y-%m-%d")
+        if date_to:
+            query["created_at"]["$lte"] = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
     rows = list(db.deliveries.find(query).sort("created_at", -1))
     return jsonify(to_json_safe(rows))
+
+
+@app.route("/api/deliveries/summary", methods=["GET"])
+@login_required
+def api_deliveries_summary():
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    query = {}
+    if date_from or date_to:
+        query["created_at"] = {}
+        if date_from:
+            query["created_at"]["$gte"] = datetime.strptime(date_from, "%Y-%m-%d")
+        if date_to:
+            query["created_at"]["$lte"] = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+
+    rows = list(db.deliveries.find(query))
+    total_usd = sum(r.get("fee_amount", 0) for r in rows if r.get("fee_currency", "USD") == "USD")
+    total_khr = sum(r.get("fee_amount", 0) for r in rows if r.get("fee_currency") == "KHR")
+    distinct_clients = len(set(r.get("client_name") for r in rows if r.get("client_name")))
+
+    return jsonify({
+        "total_deliveries": len(rows),
+        "total_clients": distinct_clients,
+        "total_fee_usd": round(total_usd, 2),
+        "total_fee_khr": round(total_khr, 0),
+    })
 
 
 @app.route("/api/deliveries/<delivery_id>", methods=["PUT"])
@@ -471,9 +843,11 @@ def api_deliveries_update(delivery_id):
         return jsonify({"error": "invalid_id"}), 400
     data = request.get_json(force=True)
     update = {"updated_at": datetime.utcnow()}
-    for field in ("status", "courier", "notes", "address", "phone"):
+    for field in ("status", "notes", "address", "phone", "agent_name", "fee_amount", "fee_currency"):
         if field in data:
             update[field] = data[field]
+    if "agent_id" in data:
+        update["agent_id"] = parse_object_id(data["agent_id"]) if data["agent_id"] else None
     db.deliveries.update_one({"_id": oid}, {"$set": update})
     return jsonify({"ok": True})
 
@@ -484,17 +858,25 @@ def api_deliveries_update(delivery_id):
 @app.route("/api/dashboard/summary", methods=["GET"])
 @login_required
 def api_dashboard_summary():
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start, end = _date_range_args(default_today=True)
 
-    today_sales = list(db.sales.find({"created_at": {"$gte": today_start}}))
-    today_revenue = sum(s["total"] for s in today_sales)
+    period_sales = list(db.sales.find({"created_at": {"$gte": start, "$lt": end}}))
+    period_revenue = sum(s["total"] for s in period_sales)
+
+    period_cost = period_profit = 0.0
+    for s in period_sales:
+        c, p = _sale_cost_and_profit(s)
+        period_cost += c
+        period_profit += p
+    margin_pct = round((period_profit / (period_revenue or 1) * 100), 1) if period_revenue else 0
 
     total_items = db.items.count_documents({})
     low_stock = list(db.items.find({"stock": {"$lte": LOW_STOCK_THRESHOLD}}).sort("stock", 1).limit(10))
     total_clients = db.clients.count_documents({})
     pending_deliveries = db.deliveries.count_documents({"status": "pending"})
 
-    # last 6 months revenue trend
+    # last 6 months revenue trend (independent of the selected date range)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     months = []
     for i in range(5, -1, -1):
         ref = today_start.replace(day=1) - timedelta(days=30 * i)
@@ -504,10 +886,10 @@ def api_dashboard_summary():
     trend = []
     for m in months:
         year, mon = map(int, m.split("-"))
-        start = datetime(year, mon, 1)
-        end = datetime(year + 1, 1, 1) if mon == 12 else datetime(year, mon + 1, 1)
+        mstart = datetime(year, mon, 1)
+        mend = datetime(year + 1, 1, 1) if mon == 12 else datetime(year, mon + 1, 1)
         rev = sum(s["total"] for s in db.sales.find(
-            {"created_at": {"$gte": start, "$lt": end}}, {"total": 1}
+            {"created_at": {"$gte": mstart, "$lt": mend}}, {"total": 1}
         ))
         trend.append({"month": m, "revenue": rev})
 
@@ -517,15 +899,26 @@ def api_dashboard_summary():
             top_items[line["name"]] = top_items.get(line["name"], 0) + line["qty"]
     top_items_sorted = sorted(top_items.items(), key=lambda x: x[1], reverse=True)[:5]
 
+    # client distribution by city / province
+    city_stats = list(db.clients.aggregate([
+        {"$group": {"_id": "$city", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]))
+    city_data = [{"city": (c["_id"] or "Unknown"), "count": c["count"]} for c in city_stats]
+
     return jsonify({
-        "today_revenue": round(today_revenue, 2),
-        "today_orders": len(today_sales),
+        "period_revenue": round(period_revenue, 2),
+        "period_orders": len(period_sales),
+        "period_cost": round(period_cost, 2),
+        "period_profit": round(period_profit, 2),
+        "margin_pct": margin_pct,
         "total_items": total_items,
         "total_clients": total_clients,
         "pending_deliveries": pending_deliveries,
         "low_stock": to_json_safe(low_stock),
         "trend": trend,
         "top_items": [{"name": n, "qty": q} for n, q in top_items_sorted],
+        "city_data": city_data,
     })
 
 
@@ -560,6 +953,57 @@ def api_reports_sales():
     })
 
 
+@app.route("/api/reports/profit", methods=["GET"])
+@login_required
+def api_reports_profit():
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    query = {}
+    if date_from or date_to:
+        query["created_at"] = {}
+        if date_from:
+            query["created_at"]["$gte"] = datetime.strptime(date_from, "%Y-%m-%d")
+        if date_to:
+            query["created_at"]["$lte"] = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+
+    sales = list(db.sales.find(query).sort("created_at", 1))
+
+    daily = {}
+    total_revenue = total_cost_all = total_profit = 0.0
+    for s in sales:
+        day = s["created_at"].strftime("%Y-%m-%d")
+        cost, profit = _sale_cost_and_profit(s)
+        revenue = round(s.get("subtotal", 0) - s.get("discount", 0), 2)  # net revenue excl. tax
+        row = daily.setdefault(day, {"date": day, "revenue": 0.0, "cost": 0.0, "profit": 0.0, "orders": 0})
+        row["revenue"] += revenue
+        row["cost"] += cost
+        row["profit"] += profit
+        row["orders"] += 1
+        total_revenue += revenue
+        total_cost_all += cost
+        total_profit += profit
+
+    days = sorted(daily.values(), key=lambda r: r["date"])
+    for d in days:
+        d["revenue"] = round(d["revenue"], 2)
+        d["cost"] = round(d["cost"], 2)
+        d["profit"] = round(d["profit"], 2)
+        d["margin_pct"] = round((d["profit"] / d["revenue"] * 100), 1) if d["revenue"] else 0
+
+    margin_pct = round((total_profit / total_revenue * 100), 1) if total_revenue else 0
+
+    return jsonify({
+        "days": days,
+        "summary": {
+            "total_revenue": round(total_revenue, 2),
+            "total_cost": round(total_cost_all, 2),
+            "total_profit": round(total_profit, 2),
+            "margin_pct": margin_pct,
+            "total_orders": len(sales),
+        },
+    })
+
+
 @app.route("/api/export/<kind>", methods=["GET"])
 @login_required
 def api_export(kind):
@@ -575,9 +1019,17 @@ def api_export(kind):
         filename = "items_export"
 
     elif kind == "clients":
-        headers = ["Code", "Name", "Phone", "Email", "Address"]
-        rows = [[c.get("code"), c.get("name"), c.get("phone"), c.get("email"), c.get("address")]
-                for c in db.clients.find()]
+        headers = ["Code", "Name", "Phone", "City", "Email", "Address", "Purchases", "Total Spent"]
+        counts = {str(c["_id"]): c for c in db.sales.aggregate([
+            {"$match": {"client_id": {"$ne": None}}},
+            {"$group": {"_id": "$client_id", "count": {"$sum": 1}, "total_spent": {"$sum": "$total"}}},
+        ])}
+        rows = []
+        for c in db.clients.find():
+            stat = counts.get(str(c["_id"]), {})
+            rows.append([c.get("code"), c.get("name"), c.get("phone"), c.get("city", ""),
+                         c.get("email"), c.get("address"), stat.get("count", 0),
+                         round(stat.get("total_spent", 0), 2)])
         filename = "clients_export"
 
     elif kind == "sales":
@@ -595,11 +1047,45 @@ def api_export(kind):
         filename = "sales_report"
 
     elif kind == "deliveries":
-        headers = ["Invoice", "Client", "Phone", "Address", "Courier", "Status", "Date"]
+        query = {}
+        if date_from or date_to:
+            query["created_at"] = {}
+            if date_from:
+                query["created_at"]["$gte"] = datetime.strptime(date_from, "%Y-%m-%d")
+            if date_to:
+                query["created_at"]["$lte"] = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        headers = ["Invoice", "Client", "Phone", "Address", "Agent", "Fee", "Currency", "Status", "Date"]
         rows = [[d.get("invoice_no"), d.get("client_name"), d.get("phone"), d.get("address"),
-                 d.get("courier"), d.get("status"), d.get("created_at").strftime("%Y-%m-%d %H:%M")]
-                for d in db.deliveries.find()]
+                 d.get("agent_name", ""), d.get("fee_amount", 0), d.get("fee_currency", "USD"),
+                 d.get("status"), d.get("created_at").strftime("%Y-%m-%d %H:%M")]
+                for d in db.deliveries.find(query)]
         filename = "deliveries_export"
+
+    elif kind == "profit":
+        query = {}
+        if date_from or date_to:
+            query["created_at"] = {}
+            if date_from:
+                query["created_at"]["$gte"] = datetime.strptime(date_from, "%Y-%m-%d")
+            if date_to:
+                query["created_at"]["$lte"] = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        daily = {}
+        for s in db.sales.find(query).sort("created_at", 1):
+            day = s["created_at"].strftime("%Y-%m-%d")
+            cost, profit = _sale_cost_and_profit(s)
+            revenue = round(s.get("subtotal", 0) - s.get("discount", 0), 2)
+            row = daily.setdefault(day, {"revenue": 0.0, "cost": 0.0, "profit": 0.0, "orders": 0})
+            row["revenue"] += revenue
+            row["cost"] += cost
+            row["profit"] += profit
+            row["orders"] += 1
+        headers = ["Date", "Orders", "Revenue", "Cost", "Profit", "Margin %"]
+        rows = []
+        for day in sorted(daily.keys()):
+            r = daily[day]
+            margin = round((r["profit"] / r["revenue"] * 100), 1) if r["revenue"] else 0
+            rows.append([day, r["orders"], round(r["revenue"], 2), round(r["cost"], 2), round(r["profit"], 2), margin])
+        filename = "profit_loss_report"
     else:
         return jsonify({"error": "unknown_export_type"}), 400
 
@@ -667,6 +1153,9 @@ def receipt_pdf(sale_id):
     c.drawString(4 * mm, y, f"Paid ({sale['payment_method']}): {sale['paid_amount']:.2f}")
     y -= 4 * mm
     c.drawString(4 * mm, y, f"Change: {sale['change']:.2f}")
+    if sale.get("delivery_fee_amount"):
+        y -= 4 * mm
+        c.drawString(4 * mm, y, f"Delivery Fee: {sale['delivery_fee_amount']:.2f} {sale.get('delivery_fee_currency','USD')}")
     y -= 8 * mm
     c.setFont("Helvetica-Oblique", 8)
     c.drawCentredString(width / 2, y, "Thank you! / សូមអរគុណ")

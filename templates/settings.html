@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block page_title %}ការកំណត់ (Settings){% endblock %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h6><i class="bi bi-image"></i> Logo ហាង (Store Logo)</h6>
+      <div class="mb-2 text-center">
+        <img id="logo-preview" src="" alt="No logo" style="max-height:120px; max-width:100%; display:none; border-radius:8px;" class="mb-2">
+        <div id="logo-empty" class="text-muted small py-3">មិនទាន់មាន Logo (No logo uploaded yet)</div>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small">ជ្រើសរើសរូបភាព Logo (PNG/JPG, ណែនាំទំហំការ៉េ)</label>
+        <input type="file" class="form-control" id="logo-file" accept="image/*">
+      </div>
+      <div class="mb-2">
+        <label class="form-label small">ឈ្មោះហាង (Store Name)</label>
+        <input type="text" class="form-control" id="store-name" placeholder="POS Vuthy">
+      </div>
+      <button class="btn btn-primary w-100" onclick="saveSettings()"><i class="bi bi-check-circle"></i> រក្សាទុក (Save)</button>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card p-3 mb-3">
+      <h6><i class="bi bi-geo-alt"></i> ក្រុង/ខេត្ត (Cities / Provinces)</h6>
+      <div class="d-flex gap-2 mb-2">
+        <input type="text" class="form-control" id="new-city" placeholder="ឈ្មោះក្រុង/ខេត្តថ្មី">
+        <button class="btn btn-outline-primary" onclick="addCity()"><i class="bi bi-plus"></i> Add</button>
+      </div>
+      <div id="city-list" class="d-flex flex-wrap gap-1"></div>
+    </div>
+
+    <div class="card p-3">
+      <h6><i class="bi bi-truck"></i> ភ្នាក់ងារដឹកជញ្ជូន (Delivery Agents)</h6>
+      <div class="row g-1 mb-2">
+        <div class="col-4"><input type="text" class="form-control form-control-sm" id="agent-name" placeholder="Name"></div>
+        <div class="col-4"><input type="text" class="form-control form-control-sm" id="agent-phone" placeholder="Phone"></div>
+        <div class="col-3"><input type="text" class="form-control form-control-sm" id="agent-vehicle" placeholder="Vehicle"></div>
+        <div class="col-1"><button class="btn btn-outline-primary btn-sm w-100" onclick="addAgent()"><i class="bi bi-plus"></i></button></div>
+      </div>
+      <table class="table table-sm">
+        <thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th></th></tr></thead>
+        <tbody id="agents-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let uploadedLogo = null;
+
+async function loadSettings(){
+  const res = await apiFetch('/api/settings');
+  const s = await res.json();
+  if(s.logo){
+    uploadedLogo = s.logo;
+    document.getElementById('logo-preview').src = s.logo;
+    document.getElementById('logo-preview').style.display = 'inline-block';
+    document.getElementById('logo-empty').style.display = 'none';
+  }
+  document.getElementById('store-name').value = s.store_name || '';
+}
+
+document.getElementById('logo-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    uploadedLogo = reader.result;
+    document.getElementById('logo-preview').src = uploadedLogo;
+    document.getElementById('logo-preview').style.display = 'inline-block';
+    document.getElementById('logo-empty').style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+});
+
+async function saveSettings(){
+  const payload = { store_name: document.getElementById('store-name').value };
+  if(uploadedLogo) payload.logo = uploadedLogo;
+  await apiFetch('/api/settings', { method:'POST', body: JSON.stringify(payload) });
+  toast('Settings saved. Refreshing...');
+  setTimeout(()=> window.location.reload(), 800);
+}
+
+async function loadCities(){
+  const res = await apiFetch('/api/cities');
+  const cities = await res.json();
+  document.getElementById('city-list').innerHTML = cities.map(c =>
+    `<span class="badge bg-light text-dark border">${c}</span>`).join('');
+}
+
+async function addCity(){
+  const name = document.getElementById('new-city').value.trim();
+  if(!name){ toast('Enter a city name', 'danger'); return; }
+  const res = await apiFetch('/api/cities', { method:'POST', body: JSON.stringify({name}) });
+  const data = await res.json();
+  if(data.error){ toast(data.message || 'City already exists', 'danger'); return; }
+  document.getElementById('new-city').value = '';
+  toast('City added');
+  loadCities();
+}
+
+async function loadAgents(){
+  const res = await apiFetch('/api/delivery-agents');
+  const agents = await res.json();
+  document.getElementById('agents-body').innerHTML = agents.map(a => `
+    <tr>
+      <td>${a.name}</td><td>${a.phone||''}</td><td>${a.vehicle||''}</td>
+      <td><button class="btn btn-sm btn-outline-danger" onclick="deleteAgent('${a.id}')"><i class="bi bi-trash"></i></button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="text-muted">No agents yet</td></tr>';
+}
+
+async function addAgent(){
+  const name = document.getElementById('agent-name').value.trim();
+  if(!name){ toast('Agent name required', 'danger'); return; }
+  const payload = {
+    name,
+    phone: document.getElementById('agent-phone').value,
+    vehicle: document.getElementById('agent-vehicle').value,
+  };
+  await apiFetch('/api/delivery-agents', { method:'POST', body: JSON.stringify(payload) });
+  ['agent-name','agent-phone','agent-vehicle'].forEach(id => document.getElementById(id).value = '');
+  toast('Agent added');
+  loadAgents();
+}
+
+async function deleteAgent(id){
+  if(!confirm('Remove this delivery agent?')) return;
+  await apiFetch('/api/delivery-agents/' + id, { method:'DELETE' });
+  toast('Agent removed');
+  loadAgents();
+}
+
+loadSettings();
+loadCities();
+loadAgents();
+</script>
+{% endblock %}
