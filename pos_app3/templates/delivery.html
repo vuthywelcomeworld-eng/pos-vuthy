@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Delivery{% endblock %}
+{% block page_title %}ការដឹកជញ្ជូន (Delivery Tracking){% endblock %}
+{% block content %}
+<div class="card p-2 mb-3">
+  <div class="d-flex gap-2 align-items-end flex-wrap">
+    <div>
+      <label class="form-label small mb-0">From</label>
+      <input type="date" id="del-from" class="form-control form-control-sm">
+    </div>
+    <div>
+      <label class="form-label small mb-0">To</label>
+      <input type="date" id="del-to" class="form-control form-control-sm">
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="applyFilters()"><i class="bi bi-search"></i> Apply</button>
+    <div class="d-flex gap-2 flex-wrap ms-2">
+      <button class="btn btn-outline-secondary btn-sm" id="status-btn-" onclick="setStatus('')">All <span class="badge bg-secondary" id="count-all">0</span></button>
+      <button class="btn btn-outline-warning btn-sm" id="status-btn-pending" onclick="setStatus('pending')">Pending <span class="badge bg-warning text-dark" id="count-pending">0</span></button>
+      <button class="btn btn-outline-primary btn-sm" id="status-btn-shipping" onclick="setStatus('shipping')">Shipping <span class="badge bg-primary" id="count-shipping">0</span></button>
+      <button class="btn btn-outline-success btn-sm" id="status-btn-delivered" onclick="setStatus('delivered')">Delivered <span class="badge bg-success" id="count-delivered">0</span></button>
+      <button class="btn btn-outline-danger btn-sm" id="status-btn-cancelled" onclick="setStatus('cancelled')">Cancelled <span class="badge bg-danger" id="count-cancelled">0</span></button>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm ms-auto" id="export-link" href="/api/export/deliveries?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Export</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="stat-card blue"><div class="label">Showing (<span id="showing-label">All</span>)</div><div class="value" id="sum-count">0</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card green"><div class="label">Unique Clients</div><div class="value" id="sum-clients">0</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card orange"><div class="label">Total Fee (USD)</div><div class="value" id="sum-usd">$0.00</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card red"><div class="label">Total Fee (KHR)</div><div class="value" id="sum-khr">៛0</div></div>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <h6><i class="bi bi-cash-stack"></i> សរុបតាមវិធីទូទាត់ (Total by Payment Method)</h6>
+  <table class="table table-sm">
+    <thead><tr><th>Payment Method</th><th>Clients</th><th>Total (USD)</th><th>Total (KHR)</th></tr></thead>
+    <tbody id="payment-summary-body"></tbody>
+  </table>
+</div>
+
+<div class="card p-3">
+  <table class="table table-hover align-middle">
+    <thead><tr>
+      <th>Invoice</th><th>Client</th><th>Phone</th><th>Address</th><th>Agent</th>
+      <th>Payment</th><th>Sub Total</th><th>Fee</th><th>Total</th><th>Status</th><th>Updated</th><th></th>
+    </tr></thead>
+    <tbody id="deliveries-body"></tbody>
+  </table>
+</div>
+
+<div class="modal fade" id="deliveryModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5>Update Delivery</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="d-id">
+        <div class="mb-2"><label class="form-label">Status</label>
+          <select class="form-select" id="d-status">
+            <option value="pending">Pending</option>
+            <option value="shipping">Shipping</option>
+            <option value="delivered">Delivered</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div class="mb-2"><label class="form-label">Payment Method</label>
+          <select class="form-select" id="d-payment">
+            <option value="cash">Cash</option>
+            <option value="card">Card</option>
+            <option value="qr">QR / Bank Transfer</option>
+          </select>
+        </div>
+        <div class="mb-2"><label class="form-label">Delivery Agent</label>
+          <select class="form-select" id="d-agent"><option value="">-- None --</option></select>
+        </div>
+        <div class="mb-2"><label class="form-label">Address</label><input class="form-control" id="d-address"></div>
+        <div class="mb-2"><label class="form-label">Phone</label><input class="form-control" id="d-phone"></div>
+        <div class="mb-2"><label class="form-label">Sub Total (Products)</label><input type="number" step="0.01" class="form-control" id="d-subtotal"></div>
+        <div class="mb-2"><label class="form-label">Delivery Fee</label>
+          <div class="d-flex gap-1">
+            <input type="number" step="0.01" class="form-control" id="d-fee">
+            <select class="form-select" id="d-fee-currency" style="max-width:100px">
+              <option value="USD">USD</option>
+              <option value="KHR">KHR</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-2"><label class="form-label fw-bold">Total (Sub Total + Fee)</label><input type="text" class="form-control" id="d-total" readonly></div>
+        <div class="mb-2"><label class="form-label">Notes</label><textarea class="form-control" id="d-notes"></textarea></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" onclick="saveDelivery()">Save</button></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let allDeliveries = [];
+let currentStatus = '';
+const statusLabels = { '': 'All', pending: 'Pending', shipping: 'Shipping', delivered: 'Delivered', cancelled: 'Cancelled' };
+
+function currentRange(){
+  const from = document.getElementById('del-from').value;
+  const to = document.getElementById('del-to').value;
+  let qs = '';
+  if(from) qs += 'from=' + from;
+  if(to) qs += (qs?'&':'') + 'to=' + to;
+  return qs;
+}
+
+function setStatus(status){
+  currentStatus = status;
+  document.querySelectorAll('[id^="status-btn-"]').forEach(b => b.classList.remove('active'));
+  document.getElementById('status-btn-' + status).classList.add('active');
+  document.getElementById('showing-label').innerText = statusLabels[status];
+  applyFilters();
+}
+
+function applyFilters(){
+  loadDeliveries();
+  loadSummary();
+  loadCounts();
+}
+
+function deliveryTotal(d){
+  const fee = d.fee_amount || 0;
+  const subtotal = d.subtotal || 0;
+  if((d.fee_currency || 'USD') === 'USD'){
+    return money(subtotal + fee) + ' USD';
+  }
+  return money(subtotal) + ' USD + ' + Number(fee).toLocaleString() + ' KHR';
+}
+
+async function loadDeliveries(){
+  let qs = currentRange();
+  if(currentStatus) qs += (qs?'&':'') + 'status=' + currentStatus;
+  const res = await apiFetch('/api/deliveries' + (qs ? '?'+qs : ''));
+  allDeliveries = await res.json();
+  document.getElementById('deliveries-body').innerHTML = allDeliveries.map(d => `
+    <tr>
+      <td>${d.invoice_no}</td><td>${d.client_name}</td><td>${d.phone||''}</td><td>${d.address||''}</td>
+      <td>${d.agent_name||''}</td>
+      <td><span class="badge bg-light text-dark border">${d.payment_method||'-'}</span></td>
+      <td>$${money(d.subtotal||0)}</td>
+      <td>${d.fee_amount ? money(d.fee_amount) + ' ' + (d.fee_currency||'USD') : '-'}</td>
+      <td class="fw-bold">${deliveryTotal(d)}</td>
+      <td><span class="badge badge-status-${d.status}">${d.status}</span></td>
+      <td class="small text-muted">${d.updated_at}</td>
+      <td><button class="btn btn-sm btn-outline-primary" onclick="editDelivery('${d.id}')"><i class="bi bi-pencil"></i></button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="12" class="text-muted">No deliveries found</td></tr>';
+  document.getElementById('sum-count').innerText = allDeliveries.length;
+}
+
+async function loadCounts(){
+  const qs = currentRange();
+  const res = await apiFetch('/api/deliveries/counts' + (qs ? '?'+qs : ''));
+  const data = await res.json();
+  document.getElementById('count-all').innerText = data.all;
+  document.getElementById('count-pending').innerText = data.pending;
+  document.getElementById('count-shipping').innerText = data.shipping;
+  document.getElementById('count-delivered').innerText = data.delivered;
+  document.getElementById('count-cancelled').innerText = data.cancelled;
+}
+
+async function loadSummary(){
+  const qs = currentRange();
+  const res = await apiFetch('/api/deliveries/summary' + (qs ? '?'+qs : ''));
+  const data = await res.json();
+  document.getElementById('sum-clients').innerText = data.total_clients;
+  document.getElementById('sum-usd').innerText = '$' + money(data.total_fee_usd);
+  document.getElementById('sum-khr').innerText = '៛' + Number(data.total_fee_khr).toLocaleString();
+  document.getElementById('export-link').href = '/api/export/deliveries?format=xlsx&' + qs;
+
+  document.getElementById('payment-summary-body').innerHTML = data.by_payment_method.map(p => `
+    <tr>
+      <td><span class="badge bg-light text-dark border">${p.method}</span></td>
+      <td>${p.clients}</td>
+      <td>$${money(p.total_usd)}</td>
+      <td>${p.total_khr ? '៛' + Number(p.total_khr).toLocaleString() : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="text-muted">No data in this range</td></tr>';
+}
+
+async function loadAgentOptions(){
+  const res = await apiFetch('/api/delivery-agents');
+  const agents = await res.json();
+  document.getElementById('d-agent').innerHTML = '<option value="">-- None --</option>' +
+    agents.map(a => `<option value="${a.id}" data-name="${a.name}">${a.name}</option>`).join('');
+}
+
+function updateModalTotal(){
+  const subtotal = parseFloat(document.getElementById('d-subtotal').value) || 0;
+  const fee = parseFloat(document.getElementById('d-fee').value) || 0;
+  const currency = document.getElementById('d-fee-currency').value;
+  document.getElementById('d-total').value = currency === 'USD'
+    ? money(subtotal + fee) + ' USD'
+    : money(subtotal) + ' USD + ' + fee.toLocaleString() + ' KHR';
+}
+['d-subtotal','d-fee','d-fee-currency'].forEach(id =>
+  document.getElementById(id).addEventListener('input', updateModalTotal));
+
+function editDelivery(id){
+  const d = allDeliveries.find(x => x.id === id);
+  document.getElementById('d-id').value = d.id;
+  document.getElementById('d-status').value = d.status;
+  document.getElementById('d-payment').value = d.payment_method || 'cash';
+  document.getElementById('d-agent').value = d.agent_id || '';
+  document.getElementById('d-address').value = d.address || '';
+  document.getElementById('d-phone').value = d.phone || '';
+  document.getElementById('d-subtotal').value = d.subtotal || 0;
+  document.getElementById('d-fee').value = d.fee_amount || '';
+  document.getElementById('d-fee-currency').value = d.fee_currency || 'USD';
+  document.getElementById('d-notes').value = d.notes || '';
+  updateModalTotal();
+  new bootstrap.Modal(document.getElementById('deliveryModal')).show();
+}
+
+async function saveDelivery(){
+  const id = document.getElementById('d-id').value;
+  const agentSelect = document.getElementById('d-agent');
+  const payload = {
+    status: document.getElementById('d-status').value,
+    payment_method: document.getElementById('d-payment').value,
+    agent_id: agentSelect.value || null,
+    agent_name: agentSelect.value ? agentSelect.selectedOptions[0].dataset.name : '',
+    address: document.getElementById('d-address').value,
+    phone: document.getElementById('d-phone').value,
+    subtotal: parseFloat(document.getElementById('d-subtotal').value) || 0,
+    fee_amount: parseFloat(document.getElementById('d-fee').value) || 0,
+    fee_currency: document.getElementById('d-fee-currency').value,
+    notes: document.getElementById('d-notes').value,
+  };
+  await apiFetch('/api/deliveries/' + id, { method:'PUT', body: JSON.stringify(payload) });
+  bootstrap.Modal.getInstance(document.getElementById('deliveryModal')).hide();
+  toast('Delivery updated');
+  applyFilters();
+}
+
+setStatus('');
+loadAgentOptions();
+</script>
+{% endblock %}
