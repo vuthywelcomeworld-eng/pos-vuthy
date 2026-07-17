@@ -1,0 +1,97 @@
+:root {
+  --sidebar-w: 240px;
+  --primary: #4f46e5;
+  --dark: #1f2937;
+}
+
+body {
+  background: #f3f4f6;
+  font-family: 'Segoe UI', Khmer OS, Tahoma, sans-serif;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  min-height: 100vh;
+  background: linear-gradient(180deg, #111827, #1f2937);
+  position: sticky;
+  top: 0;
+}
+
+.sidebar .brand {
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.15rem;
+  text-decoration: none;
+}
+
+.sidebar .nav-link {
+  color: #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.92rem;
+}
+
+.sidebar .nav-link.active, .sidebar .nav-link:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.content { min-height: 100vh; }
+
+.topbar {
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.card {
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.stat-card {
+  border-radius: 16px;
+  color: #fff;
+  padding: 1.2rem;
+}
+.stat-card.blue { background: linear-gradient(135deg,#4f46e5,#6366f1); }
+.stat-card.green { background: linear-gradient(135deg,#059669,#10b981); }
+.stat-card.orange { background: linear-gradient(135deg,#d97706,#f59e0b); }
+.stat-card.red { background: linear-gradient(135deg,#dc2626,#ef4444); }
+
+.stat-card .value { font-size: 1.6rem; font-weight: 700; }
+.stat-card .label { font-size: 0.85rem; opacity: 0.9; }
+
+.toast-msg {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2000;
+  min-width: 240px;
+}
+
+.table thead th { font-size: 0.8rem; text-transform: uppercase; color: #6b7280; }
+
+.pos-item-card {
+  cursor: pointer;
+  border-radius: 12px;
+  transition: transform .1s ease;
+  text-align: center;
+  padding: 10px;
+}
+.pos-item-card:hover { transform: translateY(-3px); border-color: var(--primary) !important; }
+.pos-item-card .name { font-size: 0.85rem; font-weight: 600; }
+.pos-item-card .price { color: var(--primary); font-weight: 700; }
+
+.cart-line { border-bottom: 1px solid #eee; padding: 6px 0; }
+
+.badge-status-pending { background:#f59e0b; }
+.badge-status-shipping { background:#3b82f6; }
+.badge-status-delivered { background:#10b981; }
+.badge-status-cancelled { background:#ef4444; }
+
+#scanner-box video, #scanner-box canvas { border-radius: 10px; }
+
+@media print {
+  .sidebar, .topbar, .no-print { display: none !important; }
+  .content { width: 100% !important; }
+}

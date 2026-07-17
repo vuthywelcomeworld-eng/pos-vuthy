@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block page_title %}អតិថិជន (Client Registration){% endblock %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <input type="text" id="search-box" class="form-control" style="max-width:260px" placeholder="ស្វែងរក... (search name/phone/code/city)">
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      <select class="form-select form-select-sm" id="sort-select" style="max-width:200px" onchange="loadClients(document.getElementById('search-box').value)">
+        <option value="name:asc">Name (A-Z)</option>
+        <option value="name:desc">Name (Z-A)</option>
+        <option value="purchase_count:desc">Most Purchases</option>
+        <option value="total_spent:desc">Highest Spend</option>
+        <option value="city:asc">City (A-Z)</option>
+        <option value="created_at:desc">Newest First</option>
+      </select>
+      <a class="btn btn-outline-secondary" href="/api/export/clients?format=csv"><i class="bi bi-filetype-csv"></i> CSV</a>
+      <a class="btn btn-outline-secondary" href="/api/export/clients?format=xlsx"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#clientModal" onclick="openNewClient()">
+        <i class="bi bi-person-plus"></i> ចុះឈ្មោះអតិថិជន (Add Client)
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table table-hover align-middle">
+    <thead><tr>
+      <th></th><th>Code</th><th>Name</th><th>Phone</th><th>City</th>
+      <th>Purchases</th><th>Total Spent</th><th></th>
+    </tr></thead>
+    <tbody id="clients-body"></tbody>
+  </table>
+</div>
+
+<!-- Client Modal -->
+<div class="modal fade" id="clientModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="clientModalTitle">Add Client</h5>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="client-id">
+        <div class="mb-2"><label class="form-label">Name*</label><input class="form-control" id="client-name"></div>
+        <div class="mb-2"><label class="form-label">Phone* (unique key)</label><input class="form-control" id="client-phone"></div>
+        <div class="mb-2"><label class="form-label">Email</label><input class="form-control" id="client-email"></div>
+        <div class="mb-2">
+          <label class="form-label">City / Province</label>
+          <div class="input-group">
+            <select class="form-select" id="client-city"></select>
+            <button class="btn btn-outline-secondary" type="button" onclick="quickAddCity()"><i class="bi bi-plus-circle"></i> Add City</button>
+          </div>
+        </div>
+        <div class="mb-2"><label class="form-label">Address</label><textarea class="form-control" id="client-address"></textarea></div>
+        <div class="mb-2"><label class="form-label">Notes</label><textarea class="form-control" id="client-notes"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-danger me-auto d-none" id="btn-delete-client" onclick="deleteClient()"><i class="bi bi-trash"></i> Delete</button>
+        <button class="btn btn-primary" onclick="saveClient()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Purchase History Modal -->
+<div class="modal fade" id="historyModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="historyModalTitle">Purchase History</h5>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="d-flex gap-3 mb-3">
+          <div class="stat-card blue" style="flex:1"><div class="label">Total Orders</div><div class="value" id="hist-orders">0</div></div>
+          <div class="stat-card green" style="flex:1"><div class="label">Total Spent</div><div class="value" id="hist-spent">0.00</div></div>
+        </div>
+        <table class="table table-sm">
+          <thead><tr><th>Invoice</th><th>Date</th><th>Total</th><th>Payment</th><th></th></tr></thead>
+          <tbody id="hist-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Sale Edit Modal (admin only) -->
+<div class="modal fade" id="saleEditModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5>Edit Sale <span id="sale-edit-invoice" class="text-muted"></span></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="sale-edit-id">
+        <div class="mb-2"><label class="form-label">Payment Method</label>
+          <select class="form-select" id="sale-edit-payment">
+            <option value="cash">Cash</option>
+            <option value="card">Card</option>
+            <option value="qr">QR / Bank Transfer</option>
+          </select>
+        </div>
+        <div class="row">
+          <div class="col-6 mb-2"><label class="form-label">Discount</label><input type="number" step="0.01" class="form-control" id="sale-edit-discount"></div>
+          <div class="col-6 mb-2"><label class="form-label">Tax %</label><input type="number" step="0.01" class="form-control" id="sale-edit-tax"></div>
+        </div>
+        <div class="mb-2"><label class="form-label">Paid Amount</label><input type="number" step="0.01" class="form-control" id="sale-edit-paid"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveSaleEdit()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let currentHistoryClient = { id: null, name: null };
+let allClients = [];
+
+async function loadCityOptions(){
+  const res = await apiFetch('/api/cities');
+  const cities = await res.json();
+  document.getElementById('client-city').innerHTML =
+    '<option value="">-- Select City/Province --</option>' +
+    cities.map(c => `<option value="${c}">${c}</option>`).join('');
+}
+
+async function quickAddCity(){
+  const name = prompt('ឈ្មោះក្រុង/ខេត្តថ្មី (New city/province name):');
+  if(!name || !name.trim()) return;
+  const res = await apiFetch('/api/cities', { method:'POST', body: JSON.stringify({name: name.trim()}) });
+  const data = await res.json();
+  if(data.error){ toast(data.message || 'City already exists', 'danger'); return; }
+  await loadCityOptions();
+  document.getElementById('client-city').value = name.trim();
+  toast('City added');
+}
+
+function currentSort(){
+  const [sort_by, sort_dir] = document.getElementById('sort-select').value.split(':');
+  return `sort_by=${sort_by}&sort_dir=${sort_dir}`;
+}
+
+async function loadClients(q=''){
+  const res = await apiFetch('/api/clients?q=' + encodeURIComponent(q) + '&' + currentSort());
+  allClients = await res.json();
+  document.getElementById('clients-body').innerHTML = allClients.map(c => `
+    <tr>
+      <td>
+        <button class="btn btn-sm ${c.favorite ? 'btn-warning' : 'btn-outline-secondary'}" title="Pin favorite" onclick="toggleFavorite('${c.id}')">
+          <i class="bi bi-star${c.favorite ? '-fill' : ''}"></i>
+        </button>
+      </td>
+      <td>${c.code}</td><td>${c.name}</td><td>${c.phone||''}</td><td>${c.city||''}</td>
+      <td><span class="badge bg-primary">${c.purchase_count||0}</span></td>
+      <td>$${money(c.total_spent||0)}</td>
+      <td class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-primary" onclick="editClient('${c.id}')"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-sm btn-outline-info" onclick="viewHistory('${c.id}','${c.name.replace(/'/g,"\\'")}')"><i class="bi bi-clock-history"></i> View</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="8" class="text-muted">No clients found</td></tr>';
+}
+document.getElementById('search-box').addEventListener('input', e => loadClients(e.target.value));
+
+async function toggleFavorite(id){
+  await apiFetch('/api/clients/' + id + '/favorite', { method:'POST' });
+  loadClients(document.getElementById('search-box').value);
+}
+
+function openNewClient(){
+  document.getElementById('clientModalTitle').innerText = 'Add Client';
+  ['client-id','client-name','client-phone','client-email','client-address','client-notes'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('client-city').value = '';
+  document.getElementById('btn-delete-client').classList.add('d-none');
+}
+
+function editClient(id){
+  const c = allClients.find(x => x.id === id);
+  document.getElementById('clientModalTitle').innerText = 'Edit Client';
+  document.getElementById('client-id').value = c.id;
+  document.getElementById('client-name').value = c.name;
+  document.getElementById('client-phone').value = c.phone || '';
+  document.getElementById('client-email').value = c.email || '';
+  document.getElementById('client-city').value = c.city || '';
+  document.getElementById('client-address').value = c.address || '';
+  document.getElementById('client-notes').value = c.notes || '';
+  document.getElementById('btn-delete-client').classList.remove('d-none');
+  new bootstrap.Modal(document.getElementById('clientModal')).show();
+}
+
+async function saveClient(){
+  const id = document.getElementById('client-id').value;
+  const payload = {
+    name: document.getElementById('client-name').value,
+    phone: document.getElementById('client-phone').value,
+    email: document.getElementById('client-email').value,
+    city: document.getElementById('client-city').value,
+    address: document.getElementById('client-address').value,
+    notes: document.getElementById('client-notes').value,
+  };
+  if(!payload.name){ toast('Name is required', 'danger'); return; }
+  if(!payload.phone){ toast('Phone is required (used as the unique key)', 'danger'); return; }
+
+  const res = id
+    ? await apiFetch('/api/clients/' + id, { method:'PUT', body: JSON.stringify(payload) })
+    : await apiFetch('/api/clients', { method:'POST', body: JSON.stringify(payload) });
+  const data = await res.json();
+  if(res.status === 409){ toast(data.message || 'Duplicate phone number', 'danger'); return; }
+  bootstrap.Modal.getInstance(document.getElementById('clientModal')).hide();
+  toast('Client saved');
+  loadClients();
+}
+
+async function deleteClient(){
+  const id = document.getElementById('client-id').value;
+  if(!confirm('Delete this client?')) return;
+  await apiFetch('/api/clients/' + id, { method:'DELETE' });
+  bootstrap.Modal.getInstance(document.getElementById('clientModal')).hide();
+  toast('Client deleted');
+  loadClients();
+}
+
+async function viewHistory(id, name){
+  currentHistoryClient = { id, name };
+  document.getElementById('historyModalTitle').innerText = 'Purchase History — ' + name;
+  const res = await apiFetch('/api/clients/' + id + '/purchases');
+  const data = await res.json();
+  document.getElementById('hist-orders').innerText = data.summary.total_orders;
+  document.getElementById('hist-spent').innerText = '$' + money(data.summary.total_spent);
+  const isAdmin = window.CURRENT_ROLE === 'admin';
+  document.getElementById('hist-body').innerHTML = data.sales.map(s => `
+    <tr>
+      <td>${s.invoice_no}</td><td>${s.created_at}</td><td>$${money(s.total)}</td><td>${s.payment_method}</td>
+      <td class="d-flex gap-1">
+        <a class="btn btn-sm btn-outline-secondary" href="/receipt/${s.id}" target="_blank"><i class="bi bi-receipt"></i></a>
+        ${isAdmin ? `<button class="btn btn-sm btn-outline-primary" onclick='openSaleEdit(${JSON.stringify(s)})'><i class="bi bi-pencil"></i></button>` : ''}
+        ${isAdmin ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteSale('${s.id}')"><i class="bi bi-trash"></i></button>` : ''}
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="text-muted">No purchases yet</td></tr>';
+  new bootstrap.Modal(document.getElementById('historyModal')).show();
+}
+
+function openSaleEdit(sale){
+  document.getElementById('sale-edit-id').value = sale.id;
+  document.getElementById('sale-edit-invoice').innerText = '(' + sale.invoice_no + ')';
+  document.getElementById('sale-edit-payment').value = sale.payment_method;
+  document.getElementById('sale-edit-discount').value = sale.discount;
+  document.getElementById('sale-edit-tax').value = sale.tax_rate;
+  document.getElementById('sale-edit-paid').value = sale.paid_amount;
+  new bootstrap.Modal(document.getElementById('saleEditModal')).show();
+}
+
+async function saveSaleEdit(){
+  const id = document.getElementById('sale-edit-id').value;
+  const payload = {
+    payment_method: document.getElementById('sale-edit-payment').value,
+    discount: document.getElementById('sale-edit-discount').value,
+    tax_rate: document.getElementById('sale-edit-tax').value,
+    paid_amount: document.getElementById('sale-edit-paid').value,
+  };
+  const res = await apiFetch('/api/sales/' + id, { method:'PUT', body: JSON.stringify(payload) });
+  if(res.status === 403){ toast('Only Administrator can edit sales', 'danger'); return; }
+  bootstrap.Modal.getInstance(document.getElementById('saleEditModal')).hide();
+  toast('Sale updated');
+  viewHistory(currentHistoryClient.id, currentHistoryClient.name);
+  loadClients(document.getElementById('search-box').value);
+}
+
+async function deleteSale(id){
+  if(!confirm('Delete this sale? Stock will be restored. This cannot be undone.')) return;
+  const res = await apiFetch('/api/sales/' + id, { method:'DELETE' });
+  if(res.status === 403){ toast('Only Administrator can delete sales', 'danger'); return; }
+  toast('Sale deleted, stock restored');
+  viewHistory(currentHistoryClient.id, currentHistoryClient.name);
+  loadClients(document.getElementById('search-box').value);
+}
+
+loadCityOptions();
+loadClients();
+</script>
+{% endblock %}

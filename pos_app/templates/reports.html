@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block page_title %}របាយការណ៍ (Reports){% endblock %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <div class="d-flex gap-2 flex-wrap align-items-end">
+    <div>
+      <label class="form-label small mb-0">From</label>
+      <input type="date" id="rep-from" class="form-control form-control-sm">
+    </div>
+    <div>
+      <label class="form-label small mb-0">To</label>
+      <input type="date" id="rep-to" class="form-control form-control-sm">
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="loadReport()"><i class="bi bi-search"></i> Filter</button>
+    <a class="btn btn-outline-secondary btn-sm ms-auto" id="export-csv" href="#"><i class="bi bi-filetype-csv"></i> CSV</a>
+    <a class="btn btn-outline-secondary btn-sm" id="export-xlsx" href="#"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="stat-card blue"><div class="label">Total Revenue</div><div class="value" id="rep-revenue">0.00</div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card green"><div class="label">Total Orders</div><div class="value" id="rep-orders">0</div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card orange"><div class="label">Items Sold</div><div class="value" id="rep-items-sold">0</div></div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table table-sm table-hover">
+    <thead><tr><th>Invoice</th><th>Date</th><th>Client</th><th>Subtotal</th><th>Discount</th><th>Tax</th><th>Total</th><th>Payment</th><th>Cashier</th><th></th></tr></thead>
+    <tbody id="report-body"></tbody>
+  </table>
+</div>
+
+<hr class="my-4">
+
+<h5 class="mb-3"><i class="bi bi-graph-up-arrow"></i> ចំណេញ/ខាតប្រចាំថ្ងៃ (Daily Profit &amp; Loss)</h5>
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="stat-card blue"><div class="label">Revenue</div><div class="value" id="profit-revenue">0.00</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card orange"><div class="label">Cost (COGS)</div><div class="value" id="profit-cost">0.00</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card green"><div class="label">Net Profit</div><div class="value" id="profit-net">0.00</div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card red"><div class="label">Margin %</div><div class="value" id="profit-margin">0%</div></div>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="m-0">និន្នាការចំណេញ-ខាតតាមថ្ងៃ (Daily Trend)</h6>
+    <div>
+      <a class="btn btn-outline-secondary btn-sm" id="export-profit-csv" href="#"><i class="bi bi-filetype-csv"></i> CSV</a>
+      <a class="btn btn-outline-secondary btn-sm" id="export-profit-xlsx" href="#"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+    </div>
+  </div>
+  <canvas id="profitChart" height="90"></canvas>
+</div>
+
+<div class="card p-3">
+  <table class="table table-sm table-hover">
+    <thead><tr><th>Date</th><th>Orders</th><th>Revenue</th><th>Cost</th><th>Profit</th><th>Margin %</th></tr></thead>
+    <tbody id="profit-body"></tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+function currentRange(){
+  const from = document.getElementById('rep-from').value;
+  const to = document.getElementById('rep-to').value;
+  let qs = '';
+  if(from) qs += 'from=' + from;
+  if(to) qs += (qs?'&':'') + 'to=' + to;
+  return qs;
+}
+
+async function loadReport(){
+  await loadSalesReport();
+  await loadProfitReport();
+}
+
+async function loadSalesReport(){
+  const qs = currentRange();
+  const res = await apiFetch('/api/reports/sales' + (qs ? '?'+qs : ''));
+  const data = await res.json();
+
+  document.getElementById('rep-revenue').innerText = money(data.summary.total_revenue);
+  document.getElementById('rep-orders').innerText = data.summary.total_orders;
+  document.getElementById('rep-items-sold').innerText = data.summary.total_items_sold;
+
+  document.getElementById('report-body').innerHTML = data.sales.map(s => `
+    <tr>
+      <td>${s.invoice_no}</td><td>${s.created_at}</td><td>${s.client_name}</td>
+      <td>${money(s.subtotal)}</td><td>${money(s.discount)}</td><td>${money(s.tax)}</td>
+      <td class="fw-bold">${money(s.total)}</td><td>${s.payment_method}</td><td>${s.cashier||''}</td>
+      <td><a class="btn btn-sm btn-outline-secondary" href="/receipt/${s.id}" target="_blank"><i class="bi bi-receipt"></i></a></td>
+    </tr>
+  `).join('') || '<tr><td colspan="10" class="text-muted">No sales in this range</td></tr>';
+
+  document.getElementById('export-csv').href = '/api/export/sales?format=csv&' + qs;
+  document.getElementById('export-xlsx').href = '/api/export/sales?format=xlsx&' + qs;
+}
+
+let profitChartInstance = null;
+async function loadProfitReport(){
+  const qs = currentRange();
+  const res = await apiFetch('/api/reports/profit' + (qs ? '?'+qs : ''));
+  const data = await res.json();
+
+  document.getElementById('profit-revenue').innerText = money(data.summary.total_revenue);
+  document.getElementById('profit-cost').innerText = money(data.summary.total_cost);
+  document.getElementById('profit-net').innerText = money(data.summary.total_profit);
+  document.getElementById('profit-margin').innerText = data.summary.margin_pct + '%';
+
+  document.getElementById('profit-body').innerHTML = data.days.map(d => `
+    <tr>
+      <td>${d.date}</td><td>${d.orders}</td><td>${money(d.revenue)}</td><td>${money(d.cost)}</td>
+      <td class="${d.profit<0?'text-danger':'text-success'} fw-bold">${money(d.profit)}</td>
+      <td>${d.margin_pct}%</td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="text-muted">No data in this range</td></tr>';
+
+  if(profitChartInstance) profitChartInstance.destroy();
+  profitChartInstance = new Chart(document.getElementById('profitChart'), {
+    type: 'bar',
+    data: {
+      labels: data.days.map(d => d.date),
+      datasets: [
+        { label: 'Revenue', data: data.days.map(d => d.revenue), backgroundColor: '#4f46e5' },
+        { label: 'Cost', data: data.days.map(d => d.cost), backgroundColor: '#f59e0b' },
+        { label: 'Profit', data: data.days.map(d => d.profit), backgroundColor: '#10b981' },
+      ]
+    },
+    options: { responsive: true, scales: { x: { stacked: false } } }
+  });
+
+  document.getElementById('export-profit-csv').href = '/api/export/profit?format=csv&' + qs;
+  document.getElementById('export-profit-xlsx').href = '/api/export/profit?format=xlsx&' + qs;
+}
+
+loadReport();
+
+</script>
+{% endblock %}

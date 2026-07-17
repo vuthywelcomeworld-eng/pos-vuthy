@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Stock{% endblock %}
+{% block page_title %}គ្រប់គ្រងស្តុក (Stock Management){% endblock %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h6><i class="bi bi-arrow-repeat"></i> កែសម្រួលស្តុក (Stock Adjustment)</h6>
+      <div class="mb-2">
+        <label class="form-label">Item</label>
+        <select class="form-select" id="stock-item"></select>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Type</label>
+        <select class="form-select" id="stock-type">
+          <option value="in">Stock In (+)</option>
+          <option value="out">Stock Out (-)</option>
+          <option value="adjust">Set Exact Value</option>
+        </select>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Quantity</label>
+        <input type="number" step="0.01" class="form-control" id="stock-qty">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Reason</label>
+        <input type="text" class="form-control" id="stock-reason" placeholder="e.g. Purchase from supplier">
+      </div>
+      <button class="btn btn-primary w-100" onclick="submitStock()"><i class="bi bi-check-circle"></i> Submit</button>
+    </div>
+  </div>
+  <div class="col-md-8">
+    <div class="card p-3">
+      <h6><i class="bi bi-clock-history"></i> ប្រវត្តិស្តុក (Stock Movement History)</h6>
+      <table class="table table-sm">
+        <thead><tr><th>Date</th><th>Item</th><th>Type</th><th>Qty</th><th>Reason</th><th>User</th></tr></thead>
+        <tbody id="movements-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadItemsSelect(){
+  const res = await apiFetch('/api/items');
+  const items = await res.json();
+  document.getElementById('stock-item').innerHTML = items.map(i =>
+    `<option value="${i.id}">${i.name} (stock: ${i.stock})</option>`).join('');
+}
+
+async function loadMovements(){
+  const res = await apiFetch('/api/stock/movements');
+  const rows = await res.json();
+  document.getElementById('movements-body').innerHTML = rows.map(m => `
+    <tr>
+      <td>${m.created_at}</td><td>${m.item_name}</td>
+      <td><span class="badge bg-${m.type==='in'?'success':(m.type==='out'?'danger':'secondary')}">${m.type}</span></td>
+      <td>${m.qty}</td><td>${m.reason||''}</td><td>${m.user||''}</td>
+    </tr>
+  `).join('');
+}
+
+async function submitStock(){
+  const payload = {
+    item_id: document.getElementById('stock-item').value,
+    type: document.getElementById('stock-type').value,
+    qty: document.getElementById('stock-qty').value,
+    reason: document.getElementById('stock-reason').value,
+  };
+  const res = await apiFetch('/api/stock/adjust', { method:'POST', body: JSON.stringify(payload) });
+  const data = await res.json();
+  if(data.error){ toast(data.error, 'danger'); return; }
+  toast('Stock updated. New stock: ' + data.new_stock);
+  document.getElementById('stock-qty').value = '';
+  document.getElementById('stock-reason').value = '';
+  loadItemsSelect();
+  loadMovements();
+}
+
+loadItemsSelect();
+loadMovements();
+</script>
+{% endblock %}
