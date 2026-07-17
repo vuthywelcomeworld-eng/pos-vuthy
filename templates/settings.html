@@ -18,6 +18,14 @@
         <label class="form-label small">ឈ្មោះហាង (Store Name)</label>
         <input type="text" class="form-control" id="store-name" placeholder="POS Vuthy">
       </div>
+      <div class="mb-2">
+        <label class="form-label small">លេខទូរស័ព្ទហាង (Store Phone)</label>
+        <input type="text" class="form-control" id="store-phone" placeholder="012 345 678">
+      </div>
+      <div class="mb-2">
+        <label class="form-label small">អាសយដ្ឋានហាង (Store Address)</label>
+        <textarea class="form-control" id="store-address" placeholder="#123, Street 123, Phnom Penh"></textarea>
+      </div>
       <button class="btn btn-primary w-100" onclick="saveSettings()"><i class="bi bi-check-circle"></i> រក្សាទុក (Save)</button>
     </div>
   </div>
@@ -62,6 +70,8 @@ async function loadSettings(){
     document.getElementById('logo-empty').style.display = 'none';
   }
   document.getElementById('store-name').value = s.store_name || '';
+  document.getElementById('store-phone').value = s.phone || '';
+  document.getElementById('store-address').value = s.address || '';
 }
 
 document.getElementById('logo-file').addEventListener('change', (e) => {
@@ -78,7 +88,11 @@ document.getElementById('logo-file').addEventListener('change', (e) => {
 });
 
 async function saveSettings(){
-  const payload = { store_name: document.getElementById('store-name').value };
+  const payload = {
+    store_name: document.getElementById('store-name').value,
+    phone: document.getElementById('store-phone').value,
+    address: document.getElementById('store-address').value,
+  };
   if(uploadedLogo) payload.logo = uploadedLogo;
   await apiFetch('/api/settings', { method:'POST', body: JSON.stringify(payload) });
   toast('Settings saved. Refreshing...');

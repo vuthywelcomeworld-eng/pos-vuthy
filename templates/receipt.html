@@ -13,8 +13,9 @@
   .right { text-align: right; }
   .totals td { padding-top: 4px; }
   .grand { font-weight: bold; font-size: 15px; }
+  .free-badge { color: #059669; font-weight: bold; }
   .actions { text-align:center; margin-top: 16px; }
-  .actions button, .actions a { margin: 4px; padding: 6px 14px; }
+  .actions button, .actions a { margin: 4px; padding: 6px 14px; display:inline-block; text-decoration:none; color:#000; border:1px solid #999; border-radius:4px; background:#f5f5f5; font-size:12px; }
   @media print { .actions { display:none; } body { margin:0; width:auto; } }
 </style>
 </head>
@@ -23,6 +24,8 @@
   <div class="center"><img src="{{ store.logo }}" alt="logo" style="max-height:70px; max-width:200px; margin-bottom:6px;"></div>
   {% endif %}
   <h2>{{ store.store_name or 'POS VUTHY' }}</h2>
+  {% if store.phone %}<div class="center">☎ {{ store.phone }}</div>{% endif %}
+  {% if store.address %}<div class="center">{{ store.address }}</div>{% endif %}
   <div class="center">RECEIPT / វិក័យប័ត្រ</div>
   <hr>
   <div>Invoice: {{ sale.invoice_no }}</div>
@@ -41,24 +44,53 @@
     </tr>
     {% endfor %}
   </table>
+
+  {% if sale.complimentary_items %}
+  <hr>
+  <div class="free-badge">🎁 ជូនអោយឥតគិតថ្លៃ (Complimentary - FREE)</div>
+  <table>
+    {% for line in sale.complimentary_items %}
+    <tr>
+      <td>{{ line.name }}</td>
+      <td class="right">x {{ line.qty }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
   <hr>
   <table class="totals">
     <tr><td>Subtotal</td><td class="right">{{ "%.2f"|format(sale.subtotal) }}</td></tr>
     <tr><td>Discount</td><td class="right">{{ "%.2f"|format(sale.discount) }}</td></tr>
     <tr><td>Tax</td><td class="right">{{ "%.2f"|format(sale.tax) }}</td></tr>
-    <tr class="grand"><td>TOTAL</td><td class="right">{{ "%.2f"|format(sale.total) }}</td></tr>
-    <tr><td>Paid ({{ sale.payment_method }})</td><td class="right">{{ "%.2f"|format(sale.paid_amount) }}</td></tr>
-    <tr><td>Change</td><td class="right">{{ "%.2f"|format(sale.change) }}</td></tr>
+    <tr><td>{{ 'Total (Products)' if sale.delivery_fee_amount and sale.delivery_fee_currency == 'KHR' else 'Total' }}</td><td class="right">{{ "%.2f"|format(sale.total) }}</td></tr>
     {% if sale.delivery_fee_amount %}
     <tr><td>Delivery Fee</td><td class="right">{{ "%.2f"|format(sale.delivery_fee_amount) }} {{ sale.delivery_fee_currency }}</td></tr>
+    {% if sale.delivery_fee_currency == 'USD' %}
+    <tr class="grand"><td>GRAND TOTAL</td><td class="right">{{ "%.2f"|format(sale.total + sale.delivery_fee_amount) }} USD</td></tr>
+    {% else %}
+    <tr class="grand"><td>GRAND TOTAL</td><td class="right">{{ "%.2f"|format(sale.total) }} USD + {{ "%.0f"|format(sale.delivery_fee_amount) }} KHR</td></tr>
     {% endif %}
+    {% else %}
+    <tr class="grand"><td>TOTAL</td><td class="right">{{ "%.2f"|format(sale.total) }}</td></tr>
+    {% endif %}
+    <tr><td>Paid ({{ sale.payment_method }})</td><td class="right">{{ "%.2f"|format(sale.paid_amount) }}</td></tr>
+    <tr><td>Change</td><td class="right">{{ "%.2f"|format(sale.change) }}</td></tr>
   </table>
   <hr>
   <div class="center">Thank you! / សូមអរគុណសម្រាប់ការគាំទ្រ!</div>
 
   <div class="actions">
     <button onclick="window.print()">🖨️ Print</button>
-    <a href="/receipt/{{ sale.id }}/pdf">⬇️ Download PDF</a>
+    <a href="/receipt/{{ sale.id }}/pdf">⬇️ PDF</a>
+    <a href="#" id="telegram-share" target="_blank">📤 Telegram</a>
   </div>
+
+  <script>
+    const receiptUrl = window.location.href;
+    const shareText = "Receipt {{ sale.invoice_no }} - {{ store.store_name or 'POS Vuthy' }}";
+    document.getElementById('telegram-share').href =
+      "https://t.me/share/url?url=" + encodeURIComponent(receiptUrl) + "&text=" + encodeURIComponent(shareText);
+  </script>
 </body>
 </html>

@@ -221,6 +221,10 @@ def api_settings_update():
         update["logo"] = data["logo"]
     if "store_name" in data:
         update["store_name"] = data.get("store_name", "").strip()
+    if "phone" in data:
+        update["phone"] = data.get("phone", "").strip()
+    if "address" in data:
+        update["address"] = data.get("address", "").strip()
     db.settings.update_one({"_id": "store"}, {"$set": update}, upsert=True)
     return jsonify({"ok": True})
 
@@ -664,6 +668,78 @@ def api_sales_get(sale_id):
     return jsonify(to_json_safe(sale))
 
 
+@app.route("/api/sales/<sale_id>", methods=["PUT"])
+@login_required
+@roles_required("admin")
+def api_sales_update(sale_id):
+    """Admin-only: edit payment/discount/tax details of an existing sale and recalculate totals."""
+    oid = parse_object_id(sale_id)
+    sale = db.sales.find_one({"_id": oid}) if oid else None
+    if not sale:
+        return jsonify({"error": "not_found"}), 404
+    data = request.get_json(force=True)
+
+    subtotal = sale["subtotal"]
+    total_cost = sale.get("total_cost", 0)
+    discount = float(data.get("discount", sale.get("discount", 0)) or 0)
+    tax_rate = float(data.get("tax_rate", sale.get("tax_rate", 0)) or 0)
+    taxable = max(subtotal - discount, 0)
+    tax = round(taxable * tax_rate / 100, 2)
+    total = round(taxable + tax, 2)
+    paid_amount = float(data.get("paid_amount", sale.get("paid_amount", total)) or total)
+    change = round(paid_amount - total, 2)
+    gross_profit = round(taxable - total_cost, 2)
+
+    update = {
+        "discount": discount,
+        "tax_rate": tax_rate,
+        "tax": tax,
+        "total": total,
+        "paid_amount": paid_amount,
+        "change": change,
+        "gross_profit": gross_profit,
+        "payment_method": data.get("payment_method", sale.get("payment_method")),
+        "client_name": data.get("client_name", sale.get("client_name")),
+        "updated_at": datetime.utcnow(),
+    }
+    db.sales.update_one({"_id": oid}, {"$set": update})
+
+    # keep the linked delivery record's subtotal/payment_method in sync, if any
+    db.deliveries.update_one(
+        {"sale_id": oid},
+        {"$set": {"subtotal": total, "payment_method": update["payment_method"], "updated_at": datetime.utcnow()}}
+    )
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sales/<sale_id>", methods=["DELETE"])
+@login_required
+@roles_required("admin")
+def api_sales_delete(sale_id):
+    """Admin-only: delete a sale, restore stock for its items, and remove the linked delivery record."""
+    oid = parse_object_id(sale_id)
+    sale = db.sales.find_one({"_id": oid}) if oid else None
+    if not sale:
+        return jsonify({"error": "not_found"}), 404
+
+    for line in sale.get("items", []):
+        db.items.update_one({"_id": line["item_id"]}, {"$inc": {"stock": line["qty"]}})
+    for line in sale.get("complimentary_items", []):
+        db.items.update_one({"_id": line["item_id"]}, {"$inc": {"stock": line["qty"]}})
+
+    restored_lines = sale.get("items", []) + sale.get("complimentary_items", [])
+    if restored_lines:
+        db.stock_movements.insert_many([{
+            "item_id": line["item_id"], "item_name": line["name"], "type": "in",
+            "qty": line["qty"], "reason": f"Sale {sale['invoice_no']} deleted - stock restored",
+            "created_at": datetime.utcnow(), "user": session.get("username"),
+        } for line in restored_lines])
+
+    db.deliveries.delete_many({"sale_id": oid})
+    db.sales.delete_one({"_id": oid})
+    return jsonify({"ok": True})
+
+
 @app.route("/api/sales", methods=["POST"])
 @login_required
 def api_sales_create():
@@ -776,6 +852,8 @@ def api_sales_create():
             "address": delivery_data.get("address", ""),
             "agent_id": agent_id,
             "agent_name": delivery_data.get("agent_name", ""),
+            "payment_method": sale_doc["payment_method"],
+            "subtotal": total,
             "fee_amount": delivery_fee_amount,
             "fee_currency": delivery_fee_currency,
             "status": "pending",
@@ -809,6 +887,27 @@ def api_deliveries_list():
     return jsonify(to_json_safe(rows))
 
 
+@app.route("/api/deliveries/counts", methods=["GET"])
+@login_required
+def api_deliveries_counts():
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    base_query = {}
+    if date_from or date_to:
+        base_query["created_at"] = {}
+        if date_from:
+            base_query["created_at"]["$gte"] = datetime.strptime(date_from, "%Y-%m-%d")
+        if date_to:
+            base_query["created_at"]["$lte"] = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+
+    counts = {"all": db.deliveries.count_documents(base_query)}
+    for s in ("pending", "shipping", "delivered", "cancelled"):
+        q = dict(base_query)
+        q["status"] = s
+        counts[s] = db.deliveries.count_documents(q)
+    return jsonify(counts)
+
+
 @app.route("/api/deliveries/summary", methods=["GET"])
 @login_required
 def api_deliveries_summary():
@@ -827,11 +926,32 @@ def api_deliveries_summary():
     total_khr = sum(r.get("fee_amount", 0) for r in rows if r.get("fee_currency") == "KHR")
     distinct_clients = len(set(r.get("client_name") for r in rows if r.get("client_name")))
 
+    # breakdown by payment method: total money collected (product subtotal + USD delivery fee)
+    by_payment = {}
+    for r in rows:
+        pm = r.get("payment_method") or "unknown"
+        entry = by_payment.setdefault(pm, {"clients": set(), "total_usd": 0.0, "total_khr": 0.0})
+        entry["clients"].add(r.get("client_name"))
+        subtotal = r.get("subtotal", 0) or 0
+        fee = r.get("fee_amount", 0) or 0
+        if r.get("fee_currency", "USD") == "USD":
+            entry["total_usd"] += subtotal + fee
+        else:
+            entry["total_usd"] += subtotal
+            entry["total_khr"] += fee
+
+    payment_summary = [
+        {"method": k, "clients": len(v["clients"]),
+         "total_usd": round(v["total_usd"], 2), "total_khr": round(v["total_khr"], 0)}
+        for k, v in by_payment.items()
+    ]
+
     return jsonify({
         "total_deliveries": len(rows),
         "total_clients": distinct_clients,
         "total_fee_usd": round(total_usd, 2),
         "total_fee_khr": round(total_khr, 0),
+        "by_payment_method": payment_summary,
     })
 
 
@@ -843,7 +963,8 @@ def api_deliveries_update(delivery_id):
         return jsonify({"error": "invalid_id"}), 400
     data = request.get_json(force=True)
     update = {"updated_at": datetime.utcnow()}
-    for field in ("status", "notes", "address", "phone", "agent_name", "fee_amount", "fee_currency"):
+    for field in ("status", "notes", "address", "phone", "agent_name", "fee_amount",
+                  "fee_currency", "payment_method", "subtotal"):
         if field in data:
             update[field] = data[field]
     if "agent_id" in data:
@@ -1115,7 +1236,7 @@ def receipt_pdf(sale_id):
 
     buf = io.BytesIO()
     width = 80 * mm
-    height = (150 + len(sale["items"]) * 6) * mm
+    height = (160 + len(sale["items"]) * 6 + len(sale.get("complimentary_items", [])) * 5) * mm
     c = canvas.Canvas(buf, pagesize=(width, height))
 
     y = height - 10 * mm
@@ -1138,6 +1259,17 @@ def receipt_pdf(sale_id):
         c.drawString(6 * mm, y, f"{line['qty']} x {line['price']:.2f} = {line['subtotal']:.2f}")
         y -= 5 * mm
 
+    if sale.get("complimentary_items"):
+        c.line(4 * mm, y, width - 4 * mm, y)
+        y -= 5 * mm
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(4 * mm, y, "FREE / Complimentary:")
+        y -= 4 * mm
+        c.setFont("Helvetica", 8)
+        for line in sale["complimentary_items"]:
+            c.drawString(6 * mm, y, f"{line['name'][:18]} x {line['qty']}")
+            y -= 4 * mm
+
     c.line(4 * mm, y, width - 4 * mm, y)
     y -= 5 * mm
     c.drawString(4 * mm, y, f"Subtotal: {sale['subtotal']:.2f}")
@@ -1156,6 +1288,12 @@ def receipt_pdf(sale_id):
     if sale.get("delivery_fee_amount"):
         y -= 4 * mm
         c.drawString(4 * mm, y, f"Delivery Fee: {sale['delivery_fee_amount']:.2f} {sale.get('delivery_fee_currency','USD')}")
+        y -= 5 * mm
+        c.setFont("Helvetica-Bold", 10)
+        if sale.get("delivery_fee_currency", "USD") == "USD":
+            c.drawString(4 * mm, y, f"GRAND TOTAL: {sale['total'] + sale['delivery_fee_amount']:.2f}")
+        else:
+            c.drawString(4 * mm, y, f"GRAND TOTAL: {sale['total']:.2f} USD + {sale['delivery_fee_amount']:.0f} KHR")
     y -= 8 * mm
     c.setFont("Helvetica-Oblique", 8)
     c.drawCentredString(width / 2, y, "Thank you! / សូមអរគុណ")

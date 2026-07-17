@@ -85,9 +85,37 @@
     </div>
   </div>
 </div>
+
+<!-- Sale Edit Modal (admin only) -->
+<div class="modal fade" id="saleEditModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5>Edit Sale <span id="sale-edit-invoice" class="text-muted"></span></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="sale-edit-id">
+        <div class="mb-2"><label class="form-label">Payment Method</label>
+          <select class="form-select" id="sale-edit-payment">
+            <option value="cash">Cash</option>
+            <option value="card">Card</option>
+            <option value="qr">QR / Bank Transfer</option>
+          </select>
+        </div>
+        <div class="row">
+          <div class="col-6 mb-2"><label class="form-label">Discount</label><input type="number" step="0.01" class="form-control" id="sale-edit-discount"></div>
+          <div class="col-6 mb-2"><label class="form-label">Tax %</label><input type="number" step="0.01" class="form-control" id="sale-edit-tax"></div>
+        </div>
+        <div class="mb-2"><label class="form-label">Paid Amount</label><input type="number" step="0.01" class="form-control" id="sale-edit-paid"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveSaleEdit()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
+let currentHistoryClient = { id: null, name: null };
 let allClients = [];
 
 async function loadCityOptions(){
@@ -195,18 +223,59 @@ async function deleteClient(){
 }
 
 async function viewHistory(id, name){
+  currentHistoryClient = { id, name };
   document.getElementById('historyModalTitle').innerText = 'Purchase History — ' + name;
   const res = await apiFetch('/api/clients/' + id + '/purchases');
   const data = await res.json();
   document.getElementById('hist-orders').innerText = data.summary.total_orders;
   document.getElementById('hist-spent').innerText = '$' + money(data.summary.total_spent);
+  const isAdmin = window.CURRENT_ROLE === 'admin';
   document.getElementById('hist-body').innerHTML = data.sales.map(s => `
     <tr>
       <td>${s.invoice_no}</td><td>${s.created_at}</td><td>$${money(s.total)}</td><td>${s.payment_method}</td>
-      <td><a class="btn btn-sm btn-outline-secondary" href="/receipt/${s.id}" target="_blank"><i class="bi bi-receipt"></i></a></td>
+      <td class="d-flex gap-1">
+        <a class="btn btn-sm btn-outline-secondary" href="/receipt/${s.id}" target="_blank"><i class="bi bi-receipt"></i></a>
+        ${isAdmin ? `<button class="btn btn-sm btn-outline-primary" onclick='openSaleEdit(${JSON.stringify(s)})'><i class="bi bi-pencil"></i></button>` : ''}
+        ${isAdmin ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteSale('${s.id}')"><i class="bi bi-trash"></i></button>` : ''}
+      </td>
     </tr>
   `).join('') || '<tr><td colspan="5" class="text-muted">No purchases yet</td></tr>';
   new bootstrap.Modal(document.getElementById('historyModal')).show();
+}
+
+function openSaleEdit(sale){
+  document.getElementById('sale-edit-id').value = sale.id;
+  document.getElementById('sale-edit-invoice').innerText = '(' + sale.invoice_no + ')';
+  document.getElementById('sale-edit-payment').value = sale.payment_method;
+  document.getElementById('sale-edit-discount').value = sale.discount;
+  document.getElementById('sale-edit-tax').value = sale.tax_rate;
+  document.getElementById('sale-edit-paid').value = sale.paid_amount;
+  new bootstrap.Modal(document.getElementById('saleEditModal')).show();
+}
+
+async function saveSaleEdit(){
+  const id = document.getElementById('sale-edit-id').value;
+  const payload = {
+    payment_method: document.getElementById('sale-edit-payment').value,
+    discount: document.getElementById('sale-edit-discount').value,
+    tax_rate: document.getElementById('sale-edit-tax').value,
+    paid_amount: document.getElementById('sale-edit-paid').value,
+  };
+  const res = await apiFetch('/api/sales/' + id, { method:'PUT', body: JSON.stringify(payload) });
+  if(res.status === 403){ toast('Only Administrator can edit sales', 'danger'); return; }
+  bootstrap.Modal.getInstance(document.getElementById('saleEditModal')).hide();
+  toast('Sale updated');
+  viewHistory(currentHistoryClient.id, currentHistoryClient.name);
+  loadClients(document.getElementById('search-box').value);
+}
+
+async function deleteSale(id){
+  if(!confirm('Delete this sale? Stock will be restored. This cannot be undone.')) return;
+  const res = await apiFetch('/api/sales/' + id, { method:'DELETE' });
+  if(res.status === 403){ toast('Only Administrator can delete sales', 'danger'); return; }
+  toast('Sale deleted, stock restored');
+  viewHistory(currentHistoryClient.id, currentHistoryClient.name);
+  loadClients(document.getElementById('search-box').value);
 }
 
 loadCityOptions();
